@@ -1,0 +1,4 @@
+shioaji 
+rich
+fastapi[all]
+pydantic
