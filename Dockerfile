@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# Prevent Python from writing bytecode and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install dependencies
@@ -8,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY main.py .
-COPY utils.py .
+COPY trading.py .
 COPY database.py .
 COPY models.py .
 
