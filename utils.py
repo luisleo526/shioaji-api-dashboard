@@ -2,19 +2,60 @@ import logging
 import os
 
 import shioaji as sj
+from shioaji.error import (
+    TokenError,
+    SystemMaintenance,
+    TimeoutError as SjTimeoutError,
+    AccountNotSignError,
+    AccountNotProvideError,
+    TargetContractNotExistError,
+)
 
 logger = logging.getLogger(__name__)
 
 
+class ShioajiError(Exception):
+    """Base exception for Shioaji operations."""
+    pass
+
+
+class LoginError(ShioajiError):
+    """Raised when login fails."""
+    pass
+
+
+class OrderError(ShioajiError):
+    """Raised when order placement fails."""
+    pass
+
+
 def get_api_client(simulation: bool = True):
     logger.debug(f"Creating API client with simulation={simulation}")
-    api = sj.Shioaji(simulation=simulation)
-    api.login(
-        api_key=os.getenv("API_KEY"),
-        secret_key=os.getenv("SECRET_KEY"),
-    )
-    logger.debug("API client logged in successfully")
-    return api
+    
+    api_key = os.getenv("API_KEY")
+    secret_key = os.getenv("SECRET_KEY")
+    
+    if not api_key or not secret_key:
+        logger.error("API_KEY or SECRET_KEY environment variable not set")
+        raise LoginError("API_KEY or SECRET_KEY environment variable not set")
+    
+    try:
+        api = sj.Shioaji(simulation=simulation)
+        api.login(api_key=api_key, secret_key=secret_key)
+        logger.debug("API client logged in successfully")
+        return api
+    except TokenError as e:
+        logger.error(f"Authentication failed: {e}")
+        raise LoginError(f"Authentication failed: {e}") from e
+    except SystemMaintenance as e:
+        logger.error(f"System is under maintenance: {e}")
+        raise LoginError(f"System is under maintenance: {e}") from e
+    except SjTimeoutError as e:
+        logger.error(f"Login timeout: {e}")
+        raise LoginError(f"Login timeout: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error during login: {e}")
+        raise LoginError(f"Unexpected error during login: {e}") from e
 
 
 def get_valid_symbols(api: sj.Shioaji):
@@ -81,9 +122,19 @@ def place_entry_order(
     api: sj.Shioaji, symbol: str, quantity: int, action: sj.constant.Action
 ):
     logger.debug(f"Placing entry order: symbol={symbol}, quantity={quantity}, action={action}")
-    contract = get_contract_from_symbol(api, symbol)
-    current_position = get_current_position(api, contract) or 0
-    logger.debug(f"Current position: {current_position}")
+    
+    try:
+        contract = get_contract_from_symbol(api, symbol)
+    except ValueError as e:
+        logger.error(f"Contract not found: {e}")
+        raise OrderError(f"Contract not found: {e}") from e
+    
+    try:
+        current_position = get_current_position(api, contract) or 0
+        logger.debug(f"Current position: {current_position}")
+    except (AccountNotSignError, AccountNotProvideError) as e:
+        logger.error(f"Account error when getting position: {e}")
+        raise OrderError(f"Account error: {e}") from e
 
     original_quantity = quantity
     if action == sj.constant.Action.Buy and current_position < 0:
@@ -103,17 +154,40 @@ def place_entry_order(
         account=api.futopt_account,
     )
 
-    logger.debug(f"Submitting order: action={action}, quantity={quantity}")
-    result = api.place_order(contract, order)
-    logger.debug(f"Order result: {result}")
-    return result
+    try:
+        logger.debug(f"Submitting order: action={action}, quantity={quantity}")
+        result = api.place_order(contract, order)
+        logger.debug(f"Order result: {result}")
+        return result
+    except TargetContractNotExistError as e:
+        logger.error(f"Target contract not exist: {e}")
+        raise OrderError(f"Target contract not exist: {e}") from e
+    except SjTimeoutError as e:
+        logger.error(f"Order timeout: {e}")
+        raise OrderError(f"Order timeout: {e}") from e
+    except (AccountNotSignError, AccountNotProvideError) as e:
+        logger.error(f"Account error when placing order: {e}")
+        raise OrderError(f"Account error: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error when placing order: {e}")
+        raise OrderError(f"Unexpected error when placing order: {e}") from e
 
 
 def place_exit_order(api: sj.Shioaji, symbol: str, position_direction: sj.constant.Action):
     logger.debug(f"Placing exit order: symbol={symbol}, position_direction={position_direction}")
-    contract = get_contract_from_symbol(api, symbol)
-    current_position = get_current_position(api, contract) or 0
-    logger.debug(f"Current position: {current_position}")
+    
+    try:
+        contract = get_contract_from_symbol(api, symbol)
+    except ValueError as e:
+        logger.error(f"Contract not found: {e}")
+        raise OrderError(f"Contract not found: {e}") from e
+    
+    try:
+        current_position = get_current_position(api, contract) or 0
+        logger.debug(f"Current position: {current_position}")
+    except (AccountNotSignError, AccountNotProvideError) as e:
+        logger.error(f"Account error when getting position: {e}")
+        raise OrderError(f"Account error: {e}") from e
 
     # close long
     if position_direction == sj.constant.Action.Buy and current_position > 0:
@@ -127,9 +201,6 @@ def place_exit_order(api: sj.Shioaji, symbol: str, position_direction: sj.consta
             octype=sj.constant.FuturesOCType.Auto,
             account=api.futopt_account,
         )
-        result = api.place_order(contract, order)
-        logger.debug(f"Order result: {result}")
-        return result
     # close short
     elif position_direction == sj.constant.Action.Sell and current_position < 0:
         logger.debug(f"Closing short position: buying {-current_position}")
@@ -142,8 +213,23 @@ def place_exit_order(api: sj.Shioaji, symbol: str, position_direction: sj.consta
             octype=sj.constant.FuturesOCType.Auto,
             account=api.futopt_account,
         )
+    else:
+        logger.debug("No position to exit")
+        return None
+
+    try:
         result = api.place_order(contract, order)
         logger.debug(f"Order result: {result}")
         return result
-    logger.debug("No position to exit")
-    return None
+    except TargetContractNotExistError as e:
+        logger.error(f"Target contract not exist: {e}")
+        raise OrderError(f"Target contract not exist: {e}") from e
+    except SjTimeoutError as e:
+        logger.error(f"Order timeout: {e}")
+        raise OrderError(f"Order timeout: {e}") from e
+    except (AccountNotSignError, AccountNotProvideError) as e:
+        logger.error(f"Account error when placing order: {e}")
+        raise OrderError(f"Account error: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error when placing order: {e}")
+        raise OrderError(f"Unexpected error when placing order: {e}") from e
