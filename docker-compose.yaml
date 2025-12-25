@@ -9,7 +9,14 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
     volumes:
-      # Mount CA certificate for real trading (create ./certs folder and place Sinopac.pfx inside)
+      # Mount source code for live updates (no rebuild needed)
+      - ./main.py:/app/main.py:ro
+      - ./trading.py:/app/trading.py:ro
+      - ./trading_queue.py:/app/trading_queue.py:ro
+      - ./database.py:/app/database.py:ro
+      - ./models.py:/app/models.py:ro
+      - ./static:/app/static:ro
+      # Mount CA certificate for real trading
       - ./certs:/app/certs:ro
     depends_on:
       db:
@@ -34,6 +41,11 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
     volumes:
+      # Mount source code for live updates (no rebuild needed)
+      - ./trading_worker.py:/app/trading_worker.py:ro
+      - ./trading.py:/app/trading.py:ro
+      - ./trading_queue.py:/app/trading_queue.py:ro
+      # Mount CA certificate for real trading
       - ./certs:/app/certs:ro
     depends_on:
       redis:
