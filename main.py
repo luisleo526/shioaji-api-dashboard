@@ -139,6 +139,36 @@ async def list_contracts(
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/positions")
+async def list_positions(
+    _: str = Depends(verify_auth_key),
+    simulation: bool = Query(True, description="Use simulation mode"),
+):
+    """Get current futures/options positions. Ref: https://sinotrade.github.io/zh/tutor/accounting/position/"""
+    try:
+        api = get_api_client(simulation=simulation)
+        positions = api.list_positions(api.futopt_account)
+        return {
+            "positions": [
+                {
+                    "id": p.id,
+                    "code": p.code,
+                    "direction": str(p.direction.value) if hasattr(p.direction, 'value') else str(p.direction),
+                    "quantity": p.quantity,
+                    "price": p.price,
+                    "last_price": p.last_price,
+                    "pnl": p.pnl,
+                }
+                for p in positions
+            ],
+            "count": len(positions),
+        }
+    except LoginError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/order")
 async def create_order(
     order_request: OrderRequest,
@@ -290,13 +320,9 @@ async def dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order History Dashboard</title>
+    <title>Trading Dashboard</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', system-ui, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
@@ -304,10 +330,7 @@ async def dashboard():
             color: #e4e4e7;
             padding: 2rem;
         }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
+        .container { max-width: 1400px; margin: 0 auto; }
         h1 {
             font-size: 2.5rem;
             margin-bottom: 2rem;
@@ -324,12 +347,7 @@ async def dashboard():
             margin-bottom: 2rem;
             backdrop-filter: blur(10px);
         }
-        .auth-section label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: #a1a1aa;
-            font-size: 0.875rem;
-        }
+        .auth-section label { display: block; margin-bottom: 0.5rem; color: #a1a1aa; font-size: 0.875rem; }
         .auth-section input {
             width: 300px;
             padding: 0.75rem 1rem;
@@ -340,11 +358,7 @@ async def dashboard():
             font-size: 1rem;
             margin-right: 1rem;
         }
-        .auth-section input:focus {
-            outline: none;
-            border-color: #00d9ff;
-            box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
-        }
+        .auth-section input:focus { outline: none; border-color: #00d9ff; box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1); }
         button {
             padding: 0.75rem 1.5rem;
             border: none;
@@ -354,28 +368,47 @@ async def dashboard():
             cursor: pointer;
             transition: all 0.2s;
         }
-        .btn-primary {
-            background: linear-gradient(135deg, #00d9ff, #00ff88);
-            color: #1a1a2e;
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(0, 217, 255, 0.3);
-        }
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.1);
-            color: #e4e4e7;
-            margin-left: 0.5rem;
-        }
-        .btn-secondary:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-        .filters {
+        .btn-primary { background: linear-gradient(135deg, #00d9ff, #00ff88); color: #1a1a2e; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0, 217, 255, 0.3); }
+        .btn-secondary { background: rgba(255, 255, 255, 0.1); color: #e4e4e7; margin-left: 0.5rem; }
+        .btn-secondary:hover { background: rgba(255, 255, 255, 0.2); }
+        
+        /* Tabs */
+        .tabs {
             display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
+            gap: 0.5rem;
             margin-bottom: 2rem;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 0;
         }
+        .tab {
+            padding: 1rem 2rem;
+            background: transparent;
+            border: none;
+            color: #a1a1aa;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: #e4e4e7; }
+        .tab.active {
+            color: #00d9ff;
+        }
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .filters { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
         .filters select, .filters input {
             padding: 0.5rem 1rem;
             border: 1px solid rgba(255, 255, 255, 0.2);
@@ -384,15 +417,8 @@ async def dashboard():
             color: #fff;
             font-size: 0.875rem;
         }
-        .filters select option {
-            background: #1a1a2e;
-        }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
+        .filters select option { background: #1a1a2e; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
         .stat-card {
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -400,144 +426,111 @@ async def dashboard():
             padding: 1.5rem;
             backdrop-filter: blur(10px);
         }
-        .stat-card h3 {
-            font-size: 0.875rem;
-            color: #a1a1aa;
-            margin-bottom: 0.5rem;
-        }
-        .stat-card .value {
-            font-size: 2rem;
-            font-weight: 700;
-        }
+        .stat-card h3 { font-size: 0.875rem; color: #a1a1aa; margin-bottom: 0.5rem; }
+        .stat-card .value { font-size: 1.75rem; font-weight: 700; }
         .stat-card.success .value { color: #00ff88; }
         .stat-card.failed .value { color: #ff6b6b; }
         .stat-card.total .value { color: #00d9ff; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            overflow: hidden;
-        }
-        th, td {
-            padding: 1rem;
-            text-align: left;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        th {
-            background: rgba(0, 0, 0, 0.3);
-            font-weight: 600;
-            color: #a1a1aa;
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        tr:hover {
-            background: rgba(255, 255, 255, 0.05);
-        }
-        .status {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
+        .stat-card.pnl-positive .value { color: #00ff88; }
+        .stat-card.pnl-negative .value { color: #ff6b6b; }
+        table { width: 100%; border-collapse: collapse; background: rgba(255, 255, 255, 0.05); border-radius: 12px; overflow: hidden; }
+        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+        th { background: rgba(0, 0, 0, 0.3); font-weight: 600; color: #a1a1aa; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        tr:hover { background: rgba(255, 255, 255, 0.05); }
+        .status, .direction { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
         .status-success { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
         .status-failed { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
         .status-no_action { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
-        .action {
-            display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        .action-long_entry { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+        .action { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+        .action-long_entry, .direction-buy { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
         .action-long_exit { background: rgba(0, 217, 255, 0.2); color: #00d9ff; }
-        .action-short_entry { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
+        .action-short_entry, .direction-sell { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
         .action-short_exit { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
-        .error-msg {
-            color: #ff6b6b;
-            font-size: 0.875rem;
-            padding: 1rem;
-            background: rgba(255, 107, 107, 0.1);
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            display: none;
-        }
-        .loading {
-            text-align: center;
-            padding: 3rem;
-            color: #a1a1aa;
-        }
-        .empty {
-            text-align: center;
-            padding: 3rem;
-            color: #a1a1aa;
-        }
+        .pnl-positive { color: #00ff88; font-weight: 600; }
+        .pnl-negative { color: #ff6b6b; font-weight: 600; }
+        .error-msg { color: #ff6b6b; font-size: 0.875rem; padding: 1rem; background: rgba(255, 107, 107, 0.1); border-radius: 8px; margin-bottom: 1rem; display: none; }
+        .loading, .empty { text-align: center; padding: 3rem; color: #a1a1aa; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📊 Order History</h1>
+        <h1>📊 Trading Dashboard</h1>
         
         <div class="auth-section">
             <label for="authKey">API Authentication Key</label>
             <input type="password" id="authKey" placeholder="Enter your auth key">
-            <button class="btn-primary" onclick="fetchOrders()">Load Orders</button>
+            <button class="btn-primary" onclick="loadCurrentTab()">Load Data</button>
             <button class="btn-secondary" onclick="exportCSV()">Export CSV</button>
         </div>
         
         <div class="error-msg" id="errorMsg"></div>
         
-        <div class="filters">
-            <select id="filterStatus">
-                <option value="">All Status</option>
-                <option value="success">Success</option>
-                <option value="failed">Failed</option>
-                <option value="no_action">No Action</option>
-            </select>
-            <select id="filterAction">
-                <option value="">All Actions</option>
-                <option value="long_entry">Long Entry</option>
-                <option value="long_exit">Long Exit</option>
-                <option value="short_entry">Short Entry</option>
-                <option value="short_exit">Short Exit</option>
-            </select>
-            <input type="text" id="filterSymbol" placeholder="Symbol...">
-            <button class="btn-secondary" onclick="fetchOrders()">Apply Filters</button>
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('orders')">📋 Order History</button>
+            <button class="tab" onclick="switchTab('positions')">💼 Current Positions</button>
         </div>
         
-        <div class="stats" id="stats">
-            <div class="stat-card total">
-                <h3>Total Orders</h3>
-                <div class="value" id="statTotal">-</div>
+        <!-- Orders Tab -->
+        <div id="orders-tab" class="tab-content active">
+            <div class="filters">
+                <select id="filterStatus">
+                    <option value="">All Status</option>
+                    <option value="success">Success</option>
+                    <option value="failed">Failed</option>
+                    <option value="no_action">No Action</option>
+                </select>
+                <select id="filterAction">
+                    <option value="">All Actions</option>
+                    <option value="long_entry">Long Entry</option>
+                    <option value="long_exit">Long Exit</option>
+                    <option value="short_entry">Short Entry</option>
+                    <option value="short_exit">Short Exit</option>
+                </select>
+                <input type="text" id="filterSymbol" placeholder="Symbol...">
+                <button class="btn-secondary" onclick="fetchOrders()">Apply Filters</button>
             </div>
-            <div class="stat-card success">
-                <h3>Successful</h3>
-                <div class="value" id="statSuccess">-</div>
+            
+            <div class="stats" id="orderStats">
+                <div class="stat-card total"><h3>Total Orders</h3><div class="value" id="statTotal">-</div></div>
+                <div class="stat-card success"><h3>Successful</h3><div class="value" id="statSuccess">-</div></div>
+                <div class="stat-card failed"><h3>Failed</h3><div class="value" id="statFailed">-</div></div>
             </div>
-            <div class="stat-card failed">
-                <h3>Failed</h3>
-                <div class="value" id="statFailed">-</div>
-            </div>
+            
+            <div id="ordersTable"><div class="empty">Enter your auth key and click "Load Data" to view history</div></div>
         </div>
         
-        <div id="tableContainer">
-            <div class="empty">Enter your auth key and click "Load Orders" to view history</div>
+        <!-- Positions Tab -->
+        <div id="positions-tab" class="tab-content">
+            <div class="stats" id="positionStats">
+                <div class="stat-card total"><h3>Total Positions</h3><div class="value" id="posCount">-</div></div>
+                <div class="stat-card" id="pnlCard"><h3>Total P&L</h3><div class="value" id="totalPnl">-</div></div>
+            </div>
+            
+            <div id="positionsTable"><div class="empty">Enter your auth key and click "Load Data" to view positions</div></div>
         </div>
     </div>
     
     <script>
         let orders = [];
+        let positions = [];
+        let currentTab = 'orders';
+        
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchTab('${tab}')"]`).classList.add('active');
+            document.getElementById(`${tab}-tab`).classList.add('active');
+        }
+        
+        function loadCurrentTab() {
+            if (currentTab === 'orders') fetchOrders();
+            else fetchPositions();
+        }
         
         async function fetchOrders() {
             const authKey = document.getElementById('authKey').value;
-            if (!authKey) {
-                showError('Please enter your authentication key');
-                return;
-            }
+            if (!authKey) { showError('Please enter your authentication key'); return; }
             
             const status = document.getElementById('filterStatus').value;
             const action = document.getElementById('filterAction').value;
@@ -548,104 +541,94 @@ async def dashboard():
             if (action) url += `&action=${action}`;
             if (symbol) url += `&symbol=${symbol}`;
             
-            document.getElementById('tableContainer').innerHTML = '<div class="loading">Loading...</div>';
+            document.getElementById('ordersTable').innerHTML = '<div class="loading">Loading...</div>';
             hideError();
             
             try {
-                const response = await fetch(url, {
-                    headers: { 'X-Auth-Key': authKey }
-                });
-                
-                if (!response.ok) {
-                    if (response.status === 401) {
-                        throw new Error('Invalid authentication key');
-                    }
-                    throw new Error('Failed to fetch orders');
-                }
-                
+                const response = await fetch(url, { headers: { 'X-Auth-Key': authKey } });
+                if (!response.ok) throw new Error(response.status === 401 ? 'Invalid authentication key' : 'Failed to fetch orders');
                 orders = await response.json();
-                renderTable();
-                updateStats();
+                renderOrdersTable();
+                updateOrderStats();
             } catch (error) {
                 showError(error.message);
-                document.getElementById('tableContainer').innerHTML = '<div class="empty">Failed to load orders</div>';
+                document.getElementById('ordersTable').innerHTML = '<div class="empty">Failed to load orders</div>';
             }
         }
         
-        function renderTable() {
+        async function fetchPositions() {
+            const authKey = document.getElementById('authKey').value;
+            if (!authKey) { showError('Please enter your authentication key'); return; }
+            
+            document.getElementById('positionsTable').innerHTML = '<div class="loading">Loading...</div>';
+            hideError();
+            
+            try {
+                const response = await fetch('/positions', { headers: { 'X-Auth-Key': authKey } });
+                if (!response.ok) throw new Error(response.status === 401 ? 'Invalid authentication key' : 'Failed to fetch positions');
+                const data = await response.json();
+                positions = data.positions;
+                renderPositionsTable();
+                updatePositionStats();
+            } catch (error) {
+                showError(error.message);
+                document.getElementById('positionsTable').innerHTML = '<div class="empty">Failed to load positions</div>';
+            }
+        }
+        
+        function renderOrdersTable() {
             if (orders.length === 0) {
-                document.getElementById('tableContainer').innerHTML = '<div class="empty">No orders found</div>';
+                document.getElementById('ordersTable').innerHTML = '<div class="empty">No orders found</div>';
                 return;
             }
-            
-            let html = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Symbol</th>
-                            <th>Action</th>
-                            <th>Quantity</th>
-                            <th>Status</th>
-                            <th>Error</th>
-                            <th>Created At</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            
+            let html = `<table><thead><tr><th>ID</th><th>Symbol</th><th>Action</th><th>Quantity</th><th>Status</th><th>Error</th><th>Created At</th></tr></thead><tbody>`;
             for (const order of orders) {
                 const date = new Date(order.created_at).toLocaleString();
-                html += `
-                    <tr>
-                        <td>${order.id}</td>
-                        <td><strong>${order.symbol}</strong></td>
-                        <td><span class="action action-${order.action}">${order.action.replace('_', ' ')}</span></td>
-                        <td>${order.quantity}</td>
-                        <td><span class="status status-${order.status}">${order.status}</span></td>
-                        <td>${order.error_message || '-'}</td>
-                        <td>${date}</td>
-                    </tr>
-                `;
+                html += `<tr><td>${order.id}</td><td><strong>${order.symbol}</strong></td><td><span class="action action-${order.action}">${order.action.replace('_', ' ')}</span></td><td>${order.quantity}</td><td><span class="status status-${order.status}">${order.status}</span></td><td>${order.error_message || '-'}</td><td>${date}</td></tr>`;
             }
-            
             html += '</tbody></table>';
-            document.getElementById('tableContainer').innerHTML = html;
+            document.getElementById('ordersTable').innerHTML = html;
         }
         
-        function updateStats() {
-            const total = orders.length;
-            const success = orders.filter(o => o.status === 'success').length;
-            const failed = orders.filter(o => o.status === 'failed').length;
-            
-            document.getElementById('statTotal').textContent = total;
-            document.getElementById('statSuccess').textContent = success;
-            document.getElementById('statFailed').textContent = failed;
+        function renderPositionsTable() {
+            if (positions.length === 0) {
+                document.getElementById('positionsTable').innerHTML = '<div class="empty">No open positions</div>';
+                return;
+            }
+            let html = `<table><thead><tr><th>Code</th><th>Direction</th><th>Quantity</th><th>Avg Price</th><th>Last Price</th><th>P&L</th></tr></thead><tbody>`;
+            for (const pos of positions) {
+                const pnlClass = pos.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+                const dirClass = pos.direction.toLowerCase() === 'buy' ? 'direction-buy' : 'direction-sell';
+                html += `<tr><td><strong>${pos.code}</strong></td><td><span class="direction ${dirClass}">${pos.direction}</span></td><td>${pos.quantity}</td><td>${pos.price.toLocaleString()}</td><td>${pos.last_price.toLocaleString()}</td><td class="${pnlClass}">${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toLocaleString()}</td></tr>`;
+            }
+            html += '</tbody></table>';
+            document.getElementById('positionsTable').innerHTML = html;
+        }
+        
+        function updateOrderStats() {
+            document.getElementById('statTotal').textContent = orders.length;
+            document.getElementById('statSuccess').textContent = orders.filter(o => o.status === 'success').length;
+            document.getElementById('statFailed').textContent = orders.filter(o => o.status === 'failed').length;
+        }
+        
+        function updatePositionStats() {
+            const totalPnl = positions.reduce((sum, p) => sum + p.pnl, 0);
+            document.getElementById('posCount').textContent = positions.length;
+            document.getElementById('totalPnl').textContent = (totalPnl >= 0 ? '+' : '') + totalPnl.toLocaleString();
+            const pnlCard = document.getElementById('pnlCard');
+            pnlCard.className = 'stat-card ' + (totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative');
         }
         
         function exportCSV() {
             const authKey = document.getElementById('authKey').value;
-            if (!authKey) {
-                showError('Please enter your authentication key');
-                return;
-            }
-            window.open(`/orders/export?format=csv`, '_blank');
+            if (!authKey) { showError('Please enter your authentication key'); return; }
+            window.open('/orders/export?format=csv', '_blank');
         }
         
-        function showError(msg) {
-            const el = document.getElementById('errorMsg');
-            el.textContent = msg;
-            el.style.display = 'block';
-        }
+        function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.style.display = 'block'; }
+        function hideError() { document.getElementById('errorMsg').style.display = 'none'; }
         
-        function hideError() {
-            document.getElementById('errorMsg').style.display = 'none';
-        }
-        
-        // Allow Enter key to submit
-        document.getElementById('authKey').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') fetchOrders();
-        });
+        document.getElementById('authKey').addEventListener('keypress', (e) => { if (e.key === 'Enter') loadCurrentTab(); });
     </script>
 </body>
 </html>
