@@ -238,6 +238,71 @@
         .alert { padding: 1rem; border-radius: 8px; margin: 1rem 0; }
         .alert-info { background: rgba(0, 217, 255, 0.1); border: 1px solid rgba(0, 217, 255, 0.3); }
         .alert-warning { background: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); }
+        .alert-danger { background: rgba(220, 38, 38, 0.2); border: 1px solid rgba(220, 38, 38, 0.5); color: #fca5a5; }
+        
+        /* Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            width: 60px;
+            height: 30px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #22c55e;
+            transition: 0.3s;
+            border-radius: 30px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #dc2626;
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(30px);
+        }
+        
+        /* Real Trading Mode Warning Card */
+        .real-trading-mode {
+            border: 2px solid #dc2626 !important;
+            border-left: 4px solid #dc2626 !important;
+            box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.3), inset 0 0 30px rgba(220, 38, 38, 0.05);
+        }
+        .real-trading-mode::before {
+            content: "⚠️ LIVE";
+            position: absolute;
+            top: -10px;
+            right: 20px;
+            background: #dc2626;
+            color: white;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 4px;
+            letter-spacing: 1px;
+        }
+        .real-trading-mode {
+            position: relative;
+        }
         
         /* Symbol Cards */
         .symbol-grid {
@@ -371,15 +436,33 @@
                 <p style="color: #a1a1aa; margin-top: 0.5rem;">此後端系統專為 TradingView 警報 Webhook 設計，可自動執行期貨交易。</p>
             </div>
             
-            <div class="info-card">
+            <div class="info-card" id="webhookCard">
                 <h3>📍 步驟一：Webhook 網址</h3>
                 <p style="color: #a1a1aa; margin: 0.5rem 0;">將以下網址貼到 TradingView 警報的 Webhook URL 欄位：</p>
-                <div class="code-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, webhookUrl)">複製</button>
+                
+                <!-- Mode Toggle Switch -->
+                <div style="display: flex; align-items: center; gap: 1rem; margin: 1rem 0;">
+                    <span id="simLabel" style="color: #22c55e; font-weight: 600;">🧪 模擬模式</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="modeToggle" onchange="toggleTradingMode()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span id="realLabel" style="color: #71717a;">💰 實盤模式</span>
+                </div>
+                
+                <div class="code-block" id="webhookCodeBlock">
+                    <button class="copy-btn" onclick="copyWebhookUrl()">複製</button>
                     <pre id="webhookUrl"></pre>
                 </div>
-                <div class="alert alert-info">
-                    💡 <strong>提示：</strong>請將 <code>your-domain.com</code> 替換為您的實際伺服器網址
+                
+                <!-- Real Trading Warning (hidden by default) -->
+                <div class="alert" id="realTradingWarning" style="display: none; margin-top: 1rem; background: rgba(220, 38, 38, 0.15); border: 1px solid rgba(220, 38, 38, 0.4); color: #fca5a5;">
+                    ⚠️ <strong>實盤模式</strong> — 此網址將執行真實交易，請確認已設定 CA 憑證。
+                </div>
+                
+                <!-- Simulation Mode Info -->
+                <div class="alert alert-info" id="simModeInfo" style="margin-top: 1rem;">
+                    ✅ <strong>模擬模式：</strong>安全測試環境，不會執行真實交易。
                 </div>
             </div>
             
@@ -405,27 +488,43 @@
                 <div class="code-block">
                     <button class="copy-btn" onclick="copyToClipboard(this, document.getElementById('pinescriptExample').textContent)">複製</button>
                     <pre id="pinescriptExample">//@version=5
-strategy("My Strategy", overlay=true)
+strategy("My Strategy", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
 
-// 進場條件
-longCondition = ta.crossover(ta.sma(close, 14), ta.sma(close, 28))
-shortCondition = ta.crossunder(ta.sma(close, 14), ta.sma(close, 28))
+// ===== 參數設定 =====
+stopLossPct = input.float(2.0, "止損 %", minval=0.1, step=0.1)
+takeProfitPct = input.float(4.0, "止盈 %", minval=0.1, step=0.1)
 
-// 做多進場
+// ===== 進場條件 =====
+fastMA = ta.sma(close, 14)
+slowMA = ta.sma(close, 28)
+longCondition = ta.crossover(fastMA, slowMA)
+shortCondition = ta.crossunder(fastMA, slowMA)
+
+// ===== 止損止盈價格計算 =====
+longStopLoss = strategy.position_avg_price * (1 - stopLossPct / 100)
+longTakeProfit = strategy.position_avg_price * (1 + takeProfitPct / 100)
+shortStopLoss = strategy.position_avg_price * (1 + stopLossPct / 100)
+shortTakeProfit = strategy.position_avg_price * (1 - takeProfitPct / 100)
+
+// ===== 做多進場（同時平空倉） =====
 if (longCondition)
+    if (strategy.position_size < 0)  // 有空單先平倉
+        strategy.close("Short", alert_message="short_exit")
     strategy.entry("Long", strategy.long, alert_message="long_entry")
 
-// 做空進場  
+// ===== 做空進場（同時平多倉） =====
 if (shortCondition)
+    if (strategy.position_size > 0)  // 有多單先平倉
+        strategy.close("Long", alert_message="long_exit")
     strategy.entry("Short", strategy.short, alert_message="short_entry")
 
-// 做多出場（平倉）
-if (shortCondition)
-    strategy.close("Long", alert_message="long_exit")
+// ===== 多單止損止盈 =====
+if (strategy.position_size > 0)
+    strategy.exit("Long Exit", "Long", stop=longStopLoss, limit=longTakeProfit, alert_message="long_exit")
 
-// 做空出場（平倉）
-if (longCondition)
-    strategy.close("Short", alert_message="short_exit")</pre>
+// ===== 空單止損止盈 =====
+if (strategy.position_size < 0)
+    strategy.exit("Short Exit", "Short", stop=shortStopLoss, limit=shortTakeProfit, alert_message="short_exit")</pre>
                 </div>
             </div>
             
@@ -527,18 +626,6 @@ if (longCondition)
                     </ul>
                 </div>
             </div>
-            
-            <div class="info-card">
-                <h3>🔧 進階設定：實盤交易</h3>
-                <p style="color: #a1a1aa; margin: 0.5rem 0;">如需進行實盤交易，請使用以下網址：</p>
-                <div class="code-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, webhookUrlReal)">複製</button>
-                    <pre id="webhookUrlReal"></pre>
-                </div>
-                <div class="alert alert-warning">
-                    ⚠️ <strong>警告：</strong>實盤模式將執行真實交易，請謹慎使用！
-                </div>
-            </div>
         </div>
     </div>
     
@@ -552,7 +639,53 @@ if (longCondition)
         const webhookUrlReal = baseUrl + '/order?simulation=false';
         
         document.getElementById('webhookUrl').textContent = webhookUrl;
-        document.getElementById('webhookUrlReal').textContent = webhookUrlReal;
+        
+        function toggleTradingMode() {
+            const toggle = document.getElementById('modeToggle');
+            const webhookUrlEl = document.getElementById('webhookUrl');
+            const webhookCard = document.getElementById('webhookCard');
+            const realWarning = document.getElementById('realTradingWarning');
+            const simInfo = document.getElementById('simModeInfo');
+            const simLabel = document.getElementById('simLabel');
+            const realLabel = document.getElementById('realLabel');
+            
+            if (toggle.checked) {
+                // Real trading mode
+                webhookUrlEl.textContent = webhookUrlReal;
+                webhookCard.classList.add('real-trading-mode');
+                realWarning.style.display = 'block';
+                simInfo.style.display = 'none';
+                simLabel.style.color = '#71717a';
+                realLabel.style.color = '#ef4444';
+                realLabel.style.fontWeight = '600';
+                simLabel.style.fontWeight = 'normal';
+            } else {
+                // Simulation mode
+                webhookUrlEl.textContent = webhookUrl;
+                webhookCard.classList.remove('real-trading-mode');
+                realWarning.style.display = 'none';
+                simInfo.style.display = 'block';
+                simLabel.style.color = '#22c55e';
+                realLabel.style.color = '#71717a';
+                simLabel.style.fontWeight = '600';
+                realLabel.style.fontWeight = 'normal';
+            }
+        }
+        
+        function copyWebhookUrl() {
+            const toggle = document.getElementById('modeToggle');
+            const url = toggle.checked ? webhookUrlReal : webhookUrl;
+            navigator.clipboard.writeText(url).then(() => {
+                const btn = document.querySelector('#webhookCodeBlock .copy-btn');
+                const original = btn.textContent;
+                btn.textContent = '已複製！';
+                btn.style.background = '#22c55e';
+                setTimeout(() => {
+                    btn.textContent = original;
+                    btn.style.background = '';
+                }, 2000);
+            });
+        }
         
         // Load symbols on page load (no auth required)
         fetchSymbols();
