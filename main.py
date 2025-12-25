@@ -316,15 +316,15 @@ async def export_orders(
 async def dashboard():
     html_content = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trading Dashboard</title>
+    <title>自動交易控制台</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-family: 'Microsoft JhengHei', 'Segoe UI', system-ui, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
             min-height: 100vh;
             color: #e4e4e7;
@@ -339,6 +339,8 @@ async def dashboard():
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
+        h2 { font-size: 1.5rem; margin-bottom: 1rem; color: #00d9ff; }
+        h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: #e4e4e7; }
         .auth-section {
             background: rgba(255, 255, 255, 0.05);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -372,17 +374,11 @@ async def dashboard():
         .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0, 217, 255, 0.3); }
         .btn-secondary { background: rgba(255, 255, 255, 0.1); color: #e4e4e7; margin-left: 0.5rem; }
         .btn-secondary:hover { background: rgba(255, 255, 255, 0.2); }
+        .btn-copy { padding: 0.5rem 1rem; font-size: 0.875rem; }
         
-        /* Tabs */
-        .tabs {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 2rem;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
-            padding-bottom: 0;
-        }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 2rem; border-bottom: 2px solid rgba(255, 255, 255, 0.1); flex-wrap: wrap; }
         .tab {
-            padding: 1rem 2rem;
+            padding: 1rem 1.5rem;
             background: transparent;
             border: none;
             color: #a1a1aa;
@@ -393,9 +389,7 @@ async def dashboard():
             transition: all 0.2s;
         }
         .tab:hover { color: #e4e4e7; }
-        .tab.active {
-            color: #00d9ff;
-        }
+        .tab.active { color: #00d9ff; }
         .tab.active::after {
             content: '';
             position: absolute;
@@ -426,7 +420,7 @@ async def dashboard():
             padding: 1.5rem;
             backdrop-filter: blur(10px);
         }
-        .stat-card h3 { font-size: 0.875rem; color: #a1a1aa; margin-bottom: 0.5rem; }
+        .stat-card h3 { font-size: 0.875rem; color: #a1a1aa; margin-bottom: 0.5rem; margin-top: 0; }
         .stat-card .value { font-size: 1.75rem; font-weight: 700; }
         .stat-card.success .value { color: #00ff88; }
         .stat-card.failed .value { color: #ff6b6b; }
@@ -450,63 +444,288 @@ async def dashboard():
         .pnl-negative { color: #ff6b6b; font-weight: 600; }
         .error-msg { color: #ff6b6b; font-size: 0.875rem; padding: 1rem; background: rgba(255, 107, 107, 0.1); border-radius: 8px; margin-bottom: 1rem; display: none; }
         .loading, .empty { text-align: center; padding: 3rem; color: #a1a1aa; }
+        
+        /* Webhook Tab Styles */
+        .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .code-block {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            position: relative;
+            margin: 0.5rem 0;
+        }
+        .code-block pre { margin: 0; white-space: pre-wrap; }
+        .copy-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 4px;
+            color: #a1a1aa;
+            cursor: pointer;
+        }
+        .copy-btn:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
+        .field-table { margin: 1rem 0; }
+        .field-table td { padding: 0.75rem 1rem; }
+        .field-table td:first-child { font-weight: 600; color: #00d9ff; white-space: nowrap; }
+        .field-table td:nth-child(2) { color: #a1a1aa; }
+        .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
+        .badge-required { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
+        .badge-optional { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+        .example-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: 1rem; }
+        .example-card { background: rgba(0, 0, 0, 0.2); border-radius: 8px; padding: 1rem; }
+        .example-card h4 { color: #00ff88; margin-bottom: 0.5rem; font-size: 0.9rem; }
+        .alert { padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+        .alert-info { background: rgba(0, 217, 255, 0.1); border: 1px solid rgba(0, 217, 255, 0.3); }
+        .alert-warning { background: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📊 Trading Dashboard</h1>
+        <h1>📊 自動交易控制台</h1>
         
         <div class="auth-section">
-            <label for="authKey">API Authentication Key</label>
-            <input type="password" id="authKey" placeholder="Enter your auth key">
-            <button class="btn-primary" onclick="loadCurrentTab()">Load Data</button>
-            <button class="btn-secondary" onclick="exportCSV()">Export CSV</button>
+            <label for="authKey">API 驗證金鑰</label>
+            <input type="password" id="authKey" placeholder="請輸入驗證金鑰">
+            <button class="btn-primary" onclick="loadCurrentTab()">載入資料</button>
+            <button class="btn-secondary" onclick="exportCSV()">匯出 CSV</button>
         </div>
         
         <div class="error-msg" id="errorMsg"></div>
         
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('orders')">📋 Order History</button>
-            <button class="tab" onclick="switchTab('positions')">💼 Current Positions</button>
+            <button class="tab active" onclick="switchTab('orders')">📋 委託紀錄</button>
+            <button class="tab" onclick="switchTab('positions')">💼 目前持倉</button>
+            <button class="tab" onclick="switchTab('webhook')">🔗 TradingView 設定</button>
         </div>
         
         <!-- Orders Tab -->
         <div id="orders-tab" class="tab-content active">
             <div class="filters">
                 <select id="filterStatus">
-                    <option value="">All Status</option>
-                    <option value="success">Success</option>
-                    <option value="failed">Failed</option>
-                    <option value="no_action">No Action</option>
+                    <option value="">全部狀態</option>
+                    <option value="success">成功</option>
+                    <option value="failed">失敗</option>
+                    <option value="no_action">無動作</option>
                 </select>
                 <select id="filterAction">
-                    <option value="">All Actions</option>
-                    <option value="long_entry">Long Entry</option>
-                    <option value="long_exit">Long Exit</option>
-                    <option value="short_entry">Short Entry</option>
-                    <option value="short_exit">Short Exit</option>
+                    <option value="">全部動作</option>
+                    <option value="long_entry">做多進場</option>
+                    <option value="long_exit">做多出場</option>
+                    <option value="short_entry">做空進場</option>
+                    <option value="short_exit">做空出場</option>
                 </select>
-                <input type="text" id="filterSymbol" placeholder="Symbol...">
-                <button class="btn-secondary" onclick="fetchOrders()">Apply Filters</button>
+                <input type="text" id="filterSymbol" placeholder="商品代碼...">
+                <button class="btn-secondary" onclick="fetchOrders()">套用篩選</button>
             </div>
             
             <div class="stats" id="orderStats">
-                <div class="stat-card total"><h3>Total Orders</h3><div class="value" id="statTotal">-</div></div>
-                <div class="stat-card success"><h3>Successful</h3><div class="value" id="statSuccess">-</div></div>
-                <div class="stat-card failed"><h3>Failed</h3><div class="value" id="statFailed">-</div></div>
+                <div class="stat-card total"><h3>總委託數</h3><div class="value" id="statTotal">-</div></div>
+                <div class="stat-card success"><h3>成功</h3><div class="value" id="statSuccess">-</div></div>
+                <div class="stat-card failed"><h3>失敗</h3><div class="value" id="statFailed">-</div></div>
             </div>
             
-            <div id="ordersTable"><div class="empty">Enter your auth key and click "Load Data" to view history</div></div>
+            <div id="ordersTable"><div class="empty">請輸入驗證金鑰並點擊「載入資料」查看委託紀錄</div></div>
         </div>
         
         <!-- Positions Tab -->
         <div id="positions-tab" class="tab-content">
             <div class="stats" id="positionStats">
-                <div class="stat-card total"><h3>Total Positions</h3><div class="value" id="posCount">-</div></div>
-                <div class="stat-card" id="pnlCard"><h3>Total P&L</h3><div class="value" id="totalPnl">-</div></div>
+                <div class="stat-card total"><h3>持倉數量</h3><div class="value" id="posCount">-</div></div>
+                <div class="stat-card" id="pnlCard"><h3>未實現損益</h3><div class="value" id="totalPnl">-</div></div>
             </div>
             
-            <div id="positionsTable"><div class="empty">Enter your auth key and click "Load Data" to view positions</div></div>
+            <div id="positionsTable"><div class="empty">請輸入驗證金鑰並點擊「載入資料」查看目前持倉</div></div>
+        </div>
+        
+        <!-- Webhook Tab -->
+        <div id="webhook-tab" class="tab-content">
+            <div class="info-card">
+                <h2>🔗 TradingView Webhook 設定指南</h2>
+                <p style="color: #a1a1aa; margin-top: 0.5rem;">此後端系統專為 TradingView 警報 Webhook 設計，可自動執行期貨交易。</p>
+            </div>
+            
+            <div class="info-card">
+                <h3>📍 步驟一：Webhook 網址</h3>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">將以下網址貼到 TradingView 警報的 Webhook URL 欄位：</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, webhookUrl)">複製</button>
+                    <pre id="webhookUrl"></pre>
+                </div>
+                <div class="alert alert-info">
+                    💡 <strong>提示：</strong>請將 <code>your-domain.com</code> 替換為您的實際伺服器網址
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>📝 步驟二：訊息格式 (Message)</h3>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">在 TradingView 警報的「訊息」欄位中，使用以下 JSON 格式（搭配 Pine Script 策略）：</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, document.getElementById('payloadTemplate').textContent)">複製</button>
+                    <pre id="payloadTemplate">{
+    "action": "{{strategy.order.alert_message}}",
+    "quantity": {{strategy.order.contracts}},
+    "symbol": "MXFR1"
+}</pre>
+                </div>
+                <div class="alert alert-info">
+                    💡 <strong>說明：</strong><code>{{strategy.order.alert_message}}</code> 會自動帶入 Pine Script 中設定的 alert_message 值
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>📜 步驟三：Pine Script 策略範例</h3>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">在您的 Pine Script 策略中，使用 <code>alert_message</code> 參數設定交易動作：</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, document.getElementById('pinescriptExample').textContent)">複製</button>
+                    <pre id="pinescriptExample">//@version=5
+strategy("My Strategy", overlay=true)
+
+// 進場條件
+longCondition = ta.crossover(ta.sma(close, 14), ta.sma(close, 28))
+shortCondition = ta.crossunder(ta.sma(close, 14), ta.sma(close, 28))
+
+// 做多進場
+if (longCondition)
+    strategy.entry("Long", strategy.long, alert_message="long_entry")
+
+// 做空進場  
+if (shortCondition)
+    strategy.entry("Short", strategy.short, alert_message="short_entry")
+
+// 做多出場（平倉）
+if (shortCondition)
+    strategy.close("Long", alert_message="long_exit")
+
+// 做空出場（平倉）
+if (longCondition)
+    strategy.close("Short", alert_message="short_exit")</pre>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>📋 欄位說明</h3>
+                <table class="field-table">
+                    <tr>
+                        <td>action</td>
+                        <td>交易動作（使用 <code>{{strategy.order.alert_message}}</code> 自動帶入）</td>
+                        <td><span class="badge badge-required">必填</span></td>
+                    </tr>
+                    <tr>
+                        <td>quantity</td>
+                        <td>交易口數（可用 <code>{{strategy.order.contracts}}</code> 或固定數字）</td>
+                        <td><span class="badge badge-required">必填</span></td>
+                    </tr>
+                    <tr>
+                        <td>symbol</td>
+                        <td>商品代碼（如 MXFR1、TXFR1）</td>
+                        <td><span class="badge badge-required">必填</span></td>
+                    </tr>
+                </table>
+                
+                <h3 style="margin-top: 1.5rem;">🎯 action 可用值</h3>
+                <table class="field-table">
+                    <tr><td><span class="action action-long_entry">long_entry</span></td><td>做多進場 - 買入開倉</td></tr>
+                    <tr><td><span class="action action-long_exit">long_exit</span></td><td>做多出場 - 賣出平倉</td></tr>
+                    <tr><td><span class="action action-short_entry">short_entry</span></td><td>做空進場 - 賣出開倉</td></tr>
+                    <tr><td><span class="action action-short_exit">short_exit</span></td><td>做空出場 - 買入平倉</td></tr>
+                </table>
+            </div>
+            
+            <div class="info-card">
+                <h3>🔄 TradingView 可用佔位符</h3>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">以下是 TradingView 警報中可使用的變數：</p>
+                <table class="field-table">
+                    <tr><td><code>{{strategy.order.alert_message}}</code></td><td>Pine Script 中 alert_message 參數的值</td></tr>
+                    <tr><td><code>{{strategy.order.contracts}}</code></td><td>委託的合約數量</td></tr>
+                    <tr><td><code>{{strategy.order.action}}</code></td><td>委託動作（buy/sell）</td></tr>
+                    <tr><td><code>{{strategy.order.price}}</code></td><td>委託價格</td></tr>
+                    <tr><td><code>{{strategy.position_size}}</code></td><td>目前持倉大小</td></tr>
+                    <tr><td><code>{{ticker}}</code></td><td>商品代碼</td></tr>
+                    <tr><td><code>{{time}}</code></td><td>警報觸發時間</td></tr>
+                </table>
+            </div>
+            
+            <div class="info-card">
+                <h3>📌 警報訊息範例</h3>
+                
+                <h4 style="color: #00d9ff; margin: 1rem 0 0.5rem;">✨ 推薦：搭配 Pine Script 策略使用</h4>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">action 由策略自動帶入，quantity 使用策略設定的口數：</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, this.nextElementSibling.textContent)">複製</button>
+                    <pre>{"action": "{{strategy.order.alert_message}}", "quantity": {{strategy.order.contracts}}, "symbol": "MXFR1"}</pre>
+                </div>
+                
+                <h4 style="color: #a1a1aa; margin: 1.5rem 0 0.5rem;">📝 手動設定：固定值</h4>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">適用於簡單警報或指標觸發：</p>
+                <div class="example-grid">
+                    <div class="example-card">
+                        <h4>🟢 小台做多進場 1 口</h4>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard(this, this.nextElementSibling.textContent)">複製</button>
+                            <pre>{"action": "long_entry", "quantity": 1, "symbol": "MXFR1"}</pre>
+                        </div>
+                    </div>
+                    <div class="example-card">
+                        <h4>🔵 小台做多出場</h4>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard(this, this.nextElementSibling.textContent)">複製</button>
+                            <pre>{"action": "long_exit", "quantity": 1, "symbol": "MXFR1"}</pre>
+                        </div>
+                    </div>
+                    <div class="example-card">
+                        <h4>🔴 大台做空進場 2 口</h4>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard(this, this.nextElementSibling.textContent)">複製</button>
+                            <pre>{"action": "short_entry", "quantity": 2, "symbol": "TXFR1"}</pre>
+                        </div>
+                    </div>
+                    <div class="example-card">
+                        <h4>🟡 大台做空出場</h4>
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyToClipboard(this, this.nextElementSibling.textContent)">複製</button>
+                            <pre>{"action": "short_exit", "quantity": 2, "symbol": "TXFR1"}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>⚠️ 注意事項</h3>
+                <div class="alert alert-warning">
+                    <ul style="margin: 0; padding-left: 1.5rem; line-height: 1.8;">
+                        <li>預設為<strong>模擬模式</strong>，如需實盤交易請在網址加上 <code>?simulation=false</code></li>
+                        <li>商品代碼請使用正確的期貨代碼（可在「委託紀錄」查看歷史使用的代碼）</li>
+                        <li>確保 JSON 格式正確，欄位名稱需使用<strong>雙引號</strong></li>
+                        <li>quantity 必須為正整數</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>🔧 進階設定：實盤交易</h3>
+                <p style="color: #a1a1aa; margin: 0.5rem 0;">如需進行實盤交易，請使用以下網址：</p>
+                <div class="code-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, webhookUrlReal)">複製</button>
+                    <pre id="webhookUrlReal"></pre>
+                </div>
+                <div class="alert alert-warning">
+                    ⚠️ <strong>警告：</strong>實盤模式將執行真實交易，請謹慎使用！
+                </div>
+            </div>
         </div>
     </div>
     
@@ -514,6 +733,12 @@ async def dashboard():
         let orders = [];
         let positions = [];
         let currentTab = 'orders';
+        const baseUrl = window.location.origin;
+        const webhookUrl = baseUrl + '/order';
+        const webhookUrlReal = baseUrl + '/order?simulation=false';
+        
+        document.getElementById('webhookUrl').textContent = webhookUrl;
+        document.getElementById('webhookUrlReal').textContent = webhookUrlReal;
         
         function switchTab(tab) {
             currentTab = tab;
@@ -525,12 +750,12 @@ async def dashboard():
         
         function loadCurrentTab() {
             if (currentTab === 'orders') fetchOrders();
-            else fetchPositions();
+            else if (currentTab === 'positions') fetchPositions();
         }
         
         async function fetchOrders() {
             const authKey = document.getElementById('authKey').value;
-            if (!authKey) { showError('Please enter your authentication key'); return; }
+            if (!authKey) { showError('請輸入驗證金鑰'); return; }
             
             const status = document.getElementById('filterStatus').value;
             const action = document.getElementById('filterAction').value;
@@ -541,50 +766,54 @@ async def dashboard():
             if (action) url += `&action=${action}`;
             if (symbol) url += `&symbol=${symbol}`;
             
-            document.getElementById('ordersTable').innerHTML = '<div class="loading">Loading...</div>';
+            document.getElementById('ordersTable').innerHTML = '<div class="loading">載入中...</div>';
             hideError();
             
             try {
                 const response = await fetch(url, { headers: { 'X-Auth-Key': authKey } });
-                if (!response.ok) throw new Error(response.status === 401 ? 'Invalid authentication key' : 'Failed to fetch orders');
+                if (!response.ok) throw new Error(response.status === 401 ? '驗證金鑰無效' : '載入失敗');
                 orders = await response.json();
                 renderOrdersTable();
                 updateOrderStats();
             } catch (error) {
                 showError(error.message);
-                document.getElementById('ordersTable').innerHTML = '<div class="empty">Failed to load orders</div>';
+                document.getElementById('ordersTable').innerHTML = '<div class="empty">載入失敗</div>';
             }
         }
         
         async function fetchPositions() {
             const authKey = document.getElementById('authKey').value;
-            if (!authKey) { showError('Please enter your authentication key'); return; }
+            if (!authKey) { showError('請輸入驗證金鑰'); return; }
             
-            document.getElementById('positionsTable').innerHTML = '<div class="loading">Loading...</div>';
+            document.getElementById('positionsTable').innerHTML = '<div class="loading">載入中...</div>';
             hideError();
             
             try {
                 const response = await fetch('/positions', { headers: { 'X-Auth-Key': authKey } });
-                if (!response.ok) throw new Error(response.status === 401 ? 'Invalid authentication key' : 'Failed to fetch positions');
+                if (!response.ok) throw new Error(response.status === 401 ? '驗證金鑰無效' : '載入失敗');
                 const data = await response.json();
                 positions = data.positions;
                 renderPositionsTable();
                 updatePositionStats();
             } catch (error) {
                 showError(error.message);
-                document.getElementById('positionsTable').innerHTML = '<div class="empty">Failed to load positions</div>';
+                document.getElementById('positionsTable').innerHTML = '<div class="empty">載入失敗</div>';
             }
         }
         
+        const actionLabels = { long_entry: '做多進場', long_exit: '做多出場', short_entry: '做空進場', short_exit: '做空出場' };
+        const statusLabels = { success: '成功', failed: '失敗', no_action: '無動作' };
+        const dirLabels = { buy: '買', sell: '賣', Buy: '買', Sell: '賣' };
+        
         function renderOrdersTable() {
             if (orders.length === 0) {
-                document.getElementById('ordersTable').innerHTML = '<div class="empty">No orders found</div>';
+                document.getElementById('ordersTable').innerHTML = '<div class="empty">無委託紀錄</div>';
                 return;
             }
-            let html = `<table><thead><tr><th>ID</th><th>Symbol</th><th>Action</th><th>Quantity</th><th>Status</th><th>Error</th><th>Created At</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr><th>ID</th><th>商品</th><th>動作</th><th>口數</th><th>狀態</th><th>錯誤訊息</th><th>時間</th></tr></thead><tbody>`;
             for (const order of orders) {
-                const date = new Date(order.created_at).toLocaleString();
-                html += `<tr><td>${order.id}</td><td><strong>${order.symbol}</strong></td><td><span class="action action-${order.action}">${order.action.replace('_', ' ')}</span></td><td>${order.quantity}</td><td><span class="status status-${order.status}">${order.status}</span></td><td>${order.error_message || '-'}</td><td>${date}</td></tr>`;
+                const date = new Date(order.created_at).toLocaleString('zh-TW');
+                html += `<tr><td>${order.id}</td><td><strong>${order.symbol}</strong></td><td><span class="action action-${order.action}">${actionLabels[order.action] || order.action}</span></td><td>${order.quantity}</td><td><span class="status status-${order.status}">${statusLabels[order.status] || order.status}</span></td><td>${order.error_message || '-'}</td><td>${date}</td></tr>`;
             }
             html += '</tbody></table>';
             document.getElementById('ordersTable').innerHTML = html;
@@ -592,14 +821,14 @@ async def dashboard():
         
         function renderPositionsTable() {
             if (positions.length === 0) {
-                document.getElementById('positionsTable').innerHTML = '<div class="empty">No open positions</div>';
+                document.getElementById('positionsTable').innerHTML = '<div class="empty">目前無持倉</div>';
                 return;
             }
-            let html = `<table><thead><tr><th>Code</th><th>Direction</th><th>Quantity</th><th>Avg Price</th><th>Last Price</th><th>P&L</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr><th>商品代碼</th><th>方向</th><th>口數</th><th>均價</th><th>現價</th><th>損益</th></tr></thead><tbody>`;
             for (const pos of positions) {
                 const pnlClass = pos.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
                 const dirClass = pos.direction.toLowerCase() === 'buy' ? 'direction-buy' : 'direction-sell';
-                html += `<tr><td><strong>${pos.code}</strong></td><td><span class="direction ${dirClass}">${pos.direction}</span></td><td>${pos.quantity}</td><td>${pos.price.toLocaleString()}</td><td>${pos.last_price.toLocaleString()}</td><td class="${pnlClass}">${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toLocaleString()}</td></tr>`;
+                html += `<tr><td><strong>${pos.code}</strong></td><td><span class="direction ${dirClass}">${dirLabels[pos.direction] || pos.direction}</span></td><td>${pos.quantity}</td><td>${pos.price.toLocaleString()}</td><td>${pos.last_price.toLocaleString()}</td><td class="${pnlClass}">${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toLocaleString()}</td></tr>`;
             }
             html += '</tbody></table>';
             document.getElementById('positionsTable').innerHTML = html;
@@ -621,8 +850,17 @@ async def dashboard():
         
         function exportCSV() {
             const authKey = document.getElementById('authKey').value;
-            if (!authKey) { showError('Please enter your authentication key'); return; }
+            if (!authKey) { showError('請輸入驗證金鑰'); return; }
             window.open('/orders/export?format=csv', '_blank');
+        }
+        
+        function copyToClipboard(btn, text) {
+            navigator.clipboard.writeText(text).then(() => {
+                const original = btn.textContent;
+                btn.textContent = '已複製！';
+                btn.style.color = '#00ff88';
+                setTimeout(() => { btn.textContent = original; btn.style.color = ''; }, 2000);
+            });
         }
         
         function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.style.display = 'block'; }
