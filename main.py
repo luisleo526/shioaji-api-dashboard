@@ -11,24 +11,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Header, Qu
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
-import shioaji as sj
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 from database import get_db, init_db, SessionLocal
 from models import OrderHistory
-from trading import (
-    LoginError,
-    OrderError,
-    check_order_status,
-    get_api_client,
-    get_contract_from_symbol,
-    get_valid_contract_codes,
-    get_valid_symbols,
-    place_entry_order,
-    place_exit_order,
-)
+from trading_queue import get_queue_client, TradingQueueClient
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +39,8 @@ class OrderRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_symbol(self):
-        try:
-            api = get_api_client()
-            if self.symbol not in get_valid_symbols(api):
-                raise ValueError(f"Symbol {self.symbol} is not valid")
-        except LoginError as e:
-            raise ValueError(f"Failed to validate symbol: {e}") from e
+        # Symbol validation is now done via the trading worker
+        # We'll validate during order processing instead
         return self
 
 
@@ -105,11 +90,12 @@ ORDER_STATUS_MAX_RETRIES = 120  # max number of status checks (~10 minutes total
 
 def verify_order_fill(
     order_id: int,
-    trade,
+    trade_order_id: str,
+    trade_seqno: str,
     simulation: bool,
 ):
     """
-    Background task to verify order fill status.
+    Background task to verify order fill status via Redis queue.
     
     According to Shioaji docs, after placing an order, the status is 'PendingSubmit'.
     We need to call update_status to get the actual status from the exchange.
@@ -124,12 +110,11 @@ def verify_order_fill(
     
     # Database connection with retry logic
     db = None
-    db_retry_count = 0
     db_max_retries = 3
     
     def get_db_session():
         """Get a new database session with retry logic."""
-        nonlocal db, db_retry_count
+        nonlocal db
         for retry in range(db_max_retries):
             try:
                 if db is not None:
@@ -140,7 +125,6 @@ def verify_order_fill(
                 db = SessionLocal()
                 # Test connection
                 db.execute(text("SELECT 1"))
-                db_retry_count = 0
                 return db
             except OperationalError as e:
                 logger.warning(f"[BG] DB connection failed (attempt {retry + 1}/{db_max_retries}): {e}")
@@ -181,11 +165,30 @@ def verify_order_fill(
         db = get_db_session()
         logger.debug(f"[BG] Database connection established")
         
-        api = get_api_client(simulation=simulation)
-        logger.info(f"[BG] API client ready, starting status checks (max {ORDER_STATUS_MAX_RETRIES} checks, {ORDER_STATUS_CHECK_INTERVAL}s interval)")
+        # Get queue client for status checks
+        queue_client = get_queue_client()
+        logger.info(f"[BG] Queue client ready, starting status checks (max {ORDER_STATUS_MAX_RETRIES} checks, {ORDER_STATUS_CHECK_INTERVAL}s interval)")
         
         for attempt in range(ORDER_STATUS_MAX_RETRIES):
-            status_info = check_order_status(api, trade)
+            # Check order status via queue
+            try:
+                response = queue_client.check_order_status(
+                    order_id=trade_order_id,
+                    seqno=trade_seqno,
+                    simulation=simulation,
+                )
+                
+                if not response.success:
+                    logger.warning(f"[BG] Status check failed: {response.error}")
+                    time.sleep(ORDER_STATUS_CHECK_INTERVAL)
+                    continue
+                    
+                status_info = response.data
+            except (TimeoutError, ConnectionError) as e:
+                logger.warning(f"[BG] Queue error during status check: {e}")
+                time.sleep(ORDER_STATUS_CHECK_INTERVAL)
+                continue
+            
             fill_status = status_info.get("status", "unknown")
             
             # Log status change or periodic update (every 12 checks = ~1 minute)
@@ -301,8 +304,6 @@ def verify_order_fill(
                 f"({ORDER_STATUS_MAX_RETRIES} checks). Last status_code={status_info.get('status_code')}"
             )
             
-    except LoginError as e:
-        logger.error(f"[BG] Failed to login for order verification: {e}")
     except OperationalError as e:
         logger.error(f"[BG] Database connection error for order {order_id}: {e}")
     except SQLAlchemyError as e:
@@ -329,23 +330,22 @@ async def list_futures_products(
     Use /futures/{code} to see all contracts for a specific product.
     """
     try:
-        api = get_api_client(simulation=simulation)
-        futures = api.Contracts.Futures
+        queue_client = get_queue_client()
+        response = queue_client.get_futures_overview(simulation=simulation)
         
+        if not response.success:
+            raise HTTPException(status_code=503, detail=response.error)
+        
+        # Transform the response to match the expected format
         products = []
-        for attr in dir(futures):
-            if attr.startswith('_'):
-                continue
-            product = getattr(futures, attr, None)
-            if product and hasattr(product, '__iter__'):
-                contracts = list(product)
-                if contracts:
-                    first = contracts[0]
-                    products.append({
-                        "code": attr,
-                        "name": getattr(first, 'name', 'N/A'),
-                        "contract_count": len(contracts),
-                    })
+        for p in response.data.get("products", []):
+            contracts = p.get("contracts", [])
+            if contracts:
+                products.append({
+                    "code": p["product"],
+                    "name": contracts[0].get("name", "N/A"),
+                    "contract_count": len(contracts),
+                })
         
         # Sort by code
         products.sort(key=lambda x: x['code'])
@@ -354,8 +354,8 @@ async def list_futures_products(
             "products": products,
             "count": len(products),
         }
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
 
 @app.get("/futures/{code}")
@@ -369,40 +369,27 @@ async def list_futures_contracts(
     Example: /futures/TXF returns all TXF contracts (TXFK5, TXFL5, etc.)
     """
     try:
-        api = get_api_client(simulation=simulation)
-        futures = api.Contracts.Futures
+        queue_client = get_queue_client()
+        response = queue_client.get_product_contracts(product=code, simulation=simulation)
         
-        # Get the product by code (case-insensitive)
-        product = getattr(futures, code.upper(), None)
-        if not product:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"Futures product '{code}' not found. Use /futures to see available products."
-            )
+        if not response.success:
+            if "not found" in (response.error or "").lower():
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"Futures product '{code}' not found. Use /futures to see available products."
+                )
+            raise HTTPException(status_code=503, detail=response.error)
         
-        contracts = []
-        for contract in product:
-            contracts.append({
-                "symbol": contract.symbol,
-                "code": contract.code,
-                "name": contract.name,
-                "delivery_month": contract.delivery_month,
-                "delivery_date": contract.delivery_date,
-                "underlying_kind": contract.underlying_kind,
-                "unit": contract.unit,
-                "limit_up": contract.limit_up,
-                "limit_down": contract.limit_down,
-                "reference": contract.reference,
-            })
+        contracts = response.data.get("contracts", [])
         
         return {
             "product_code": code.upper(),
-            "product_name": contracts[0]['name'] if contracts else 'N/A',
+            "product_name": contracts[0].get('name', 'N/A') if contracts else 'N/A',
             "contracts": contracts,
             "count": len(contracts),
         }
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
 
 @app.get("/symbols")
@@ -411,11 +398,15 @@ async def list_symbols(
 ):
     """Get list of valid trading symbols from SUPPORTED_FUTURES (configured in ENV)."""
     try:
-        api = get_api_client(simulation=simulation)
-        symbols = get_valid_symbols(api)
-        return {"symbols": symbols, "count": len(symbols)}
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        queue_client = get_queue_client()
+        response = queue_client.get_symbols(simulation=simulation)
+        
+        if not response.success:
+            raise HTTPException(status_code=503, detail=response.error)
+        
+        return response.data
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
 
 @app.get("/symbols/{symbol}")
@@ -425,25 +416,17 @@ async def get_symbol_details(
 ):
     """Get detailed information about a specific symbol."""
     try:
-        api = get_api_client(simulation=simulation)
-        contract = get_contract_from_symbol(api, symbol)
-        return {
-            "symbol": contract.symbol,
-            "code": contract.code,
-            "name": contract.name,
-            "category": contract.category,
-            "exchange": str(contract.exchange),
-            "delivery_month": contract.delivery_month,
-            "underlying_kind": contract.underlying_kind,
-            "unit": contract.unit,
-            "limit_up": contract.limit_up,
-            "limit_down": contract.limit_down,
-            "reference": contract.reference,
-        }
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        queue_client = get_queue_client()
+        response = queue_client.get_symbol_info(symbol=symbol, simulation=simulation)
+        
+        if not response.success:
+            if "not found" in (response.error or "").lower():
+                raise HTTPException(status_code=404, detail=response.error)
+            raise HTTPException(status_code=503, detail=response.error)
+        
+        return response.data
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
 
 @app.get("/contracts")
@@ -452,11 +435,15 @@ async def list_contracts(
 ):
     """Get list of valid contract codes."""
     try:
-        api = get_api_client(simulation=simulation)
-        codes = get_valid_contract_codes(api)
-        return {"contracts": codes, "count": len(codes)}
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        queue_client = get_queue_client()
+        response = queue_client.get_contract_codes(simulation=simulation)
+        
+        if not response.success:
+            raise HTTPException(status_code=503, detail=response.error)
+        
+        return response.data
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
 
 @app.get("/positions")
@@ -466,25 +453,15 @@ async def list_positions(
 ):
     """Get current futures/options positions. Ref: https://sinotrade.github.io/zh/tutor/accounting/position/"""
     try:
-        api = get_api_client(simulation=simulation)
-        positions = api.list_positions(api.futopt_account)
-        return {
-            "positions": [
-                {
-                    "id": p.id,
-                    "code": p.code,
-                    "direction": str(p.direction.value) if hasattr(p.direction, 'value') else str(p.direction),
-                    "quantity": p.quantity,
-                    "price": p.price,
-                    "last_price": p.last_price,
-                    "pnl": p.pnl,
-                }
-                for p in positions
-            ],
-            "count": len(positions),
-        }
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        queue_client = get_queue_client()
+        response = queue_client.get_positions(simulation=simulation)
+        
+        if not response.success:
+            raise HTTPException(status_code=503, detail=response.error)
+        
+        return response.data
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -514,72 +491,101 @@ async def create_order(
     )
 
     try:
-        api = get_api_client(simulation=simulation)
-    except LoginError as e:
+        queue_client = get_queue_client()
+    except (ConnectionError, Exception) as e:
         order_history.status = "failed"
         order_history.error_message = str(e)
         db.add(order_history)
         db.commit()
         raise HTTPException(status_code=503, detail=str(e))
 
-    result = None
+    response = None
     try:
         if order_request.action == "long_entry":
-            result = place_entry_order(
-                api, order_request.symbol, order_request.quantity, sj.constant.Action.Buy
+            response = queue_client.place_entry_order(
+                symbol=order_request.symbol,
+                quantity=order_request.quantity,
+                action="Buy",
+                simulation=simulation,
             )
         elif order_request.action == "short_entry":
-            result = place_entry_order(
-                api, order_request.symbol, order_request.quantity, sj.constant.Action.Sell
+            response = queue_client.place_entry_order(
+                symbol=order_request.symbol,
+                quantity=order_request.quantity,
+                action="Sell",
+                simulation=simulation,
             )
         elif order_request.action == "long_exit":
-            result = place_exit_order(
-                api, order_request.symbol, sj.constant.Action.Buy
+            response = queue_client.place_exit_order(
+                symbol=order_request.symbol,
+                position_direction="Buy",
+                simulation=simulation,
             )
         elif order_request.action == "short_exit":
-            result = place_exit_order(
-                api, order_request.symbol, sj.constant.Action.Sell
+            response = queue_client.place_exit_order(
+                symbol=order_request.symbol,
+                position_direction="Sell",
+                simulation=simulation,
             )
-    except OrderError as e:
+            
+        if response and not response.success:
+            order_history.status = "failed"
+            order_history.error_message = response.error
+            db.add(order_history)
+            db.commit()
+            raise HTTPException(status_code=400, detail=response.error)
+            
+    except (TimeoutError, ConnectionError) as e:
         order_history.status = "failed"
         order_history.error_message = str(e)
         db.add(order_history)
         db.commit()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
 
-    if result is None:
+    if response is None or response.data is None:
+        order_history.status = "failed"
+        order_history.error_message = "No response from trading service"
+        db.add(order_history)
+        db.commit()
+        raise HTTPException(status_code=500, detail="No response from trading service")
+
+    result_data = response.data
+    
+    # Check if it's a no-action response (no position to exit)
+    if result_data.get("order_id") is None and result_data.get("message"):
         order_history.status = "no_action"
         order_history.fill_status = None
         db.add(order_history)
         db.commit()
-        return {"status": "no_action", "message": "No position to exit or invalid action"}
+        return {"status": "no_action", "message": result_data.get("message", "No position to exit or invalid action")}
 
-    # Extract order info from trade result
-    if hasattr(result, 'order') and result.order:
-        order_history.order_id = result.order.id if hasattr(result.order, 'id') else None
-        order_history.seqno = result.order.seqno if hasattr(result.order, 'seqno') else None
-        order_history.ordno = result.order.ordno if hasattr(result.order, 'ordno') else None
+    # Extract order info from result
+    order_history.order_id = result_data.get("order_id")
+    order_history.seqno = result_data.get("seqno")
+    order_history.ordno = result_data.get("ordno")
 
     # Initial status is "submitted" (order accepted, pending verification)
     order_history.status = "submitted"
-    order_history.order_result = str(result)
+    order_history.order_result = str(result_data)
     db.add(order_history)
     db.commit()
     db.refresh(order_history)
     
     # Spawn background task to verify fill status
-    background_tasks.add_task(
-        verify_order_fill,
-        order_id=order_history.id,
-        trade=result,
-        simulation=simulation,
-    )
+    if result_data.get("order_id") and result_data.get("seqno"):
+        background_tasks.add_task(
+            verify_order_fill,
+            order_id=order_history.id,
+            trade_order_id=result_data.get("order_id"),
+            trade_seqno=result_data.get("seqno"),
+            simulation=simulation,
+        )
 
     return {
         "status": "submitted",
         "order_id": order_history.id,
         "message": "Order submitted. Fill status will be verified in background.",
-        "order": str(result),
+        "order": result_data,
     }
 
 
@@ -685,64 +691,49 @@ async def recheck_order_status(
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
     
     # Check if order has the necessary info to re-check
-    if not order_record.seqno:
+    if not order_record.seqno or not order_record.order_id:
         raise HTTPException(
             status_code=400, 
-            detail="Order does not have seqno - cannot re-check status. This may be a failed or no_action order."
+            detail="Order does not have seqno/order_id - cannot re-check status. This may be a failed or no_action order."
         )
     
     try:
-        api = get_api_client(simulation=simulation)
-    except LoginError as e:
-        raise HTTPException(status_code=503, detail=f"Failed to connect to trading API: {e}")
-    
-    # We need to reconstruct a minimal trade object or use list_trades
-    # Since we don't have the original trade object, we'll use api.list_trades() to find it
-    try:
-        api.update_status(api.futopt_account)
-        trades = api.list_trades()
+        queue_client = get_queue_client()
+        response = queue_client.check_order_status(
+            order_id=order_record.order_id,
+            seqno=order_record.seqno,
+            simulation=simulation,
+        )
         
-        # Find the trade by seqno
-        matching_trade = None
-        for trade in trades:
-            if trade.order.seqno == order_record.seqno:
-                matching_trade = trade
-                break
-        
-        if not matching_trade:
+        if not response.success:
             # Trade not found in current session - might have been from previous session
-            return {
-                "order_id": order_id,
-                "status": "not_found_in_session",
-                "message": "Trade not found in current API session. The order may be from a previous trading session.",
-                "current_db_status": order_record.status,
-                "current_fill_status": order_record.fill_status,
-            }
+            if "not found" in (response.error or "").lower():
+                return {
+                    "order_id": order_id,
+                    "status": "not_found_in_session",
+                    "message": "Trade not found in current API session. The order may be from a previous trading session.",
+                    "current_db_status": order_record.status,
+                    "current_fill_status": order_record.fill_status,
+                }
+            raise HTTPException(status_code=503, detail=response.error)
         
-        # Get status from the matching trade
-        status_obj = matching_trade.status
-        order_obj = matching_trade.order
-        
-        # Get status value
-        fill_status = status_obj.status.value if hasattr(status_obj.status, 'value') else str(status_obj.status)
+        status_info = response.data
+        fill_status = status_info.get("status", "unknown")
         
         # Get deals and calculate average price
-        deals = status_obj.deals if status_obj.deals else []
-        deal_quantity = status_obj.deal_quantity if hasattr(status_obj, 'deal_quantity') else 0
-        total_value = sum(d.price * d.quantity for d in deals) if deals else 0
-        total_qty = sum(d.quantity for d in deals) if deals else 0
-        fill_avg_price = total_value / total_qty if total_qty > 0 else 0.0
+        deals = status_info.get("deals", [])
+        deal_quantity = status_info.get("deal_quantity", 0)
+        fill_avg_price = status_info.get("fill_avg_price", 0.0)
         
         # Update database record
         old_status = order_record.status
         old_fill_status = order_record.fill_status
         
         order_record.fill_status = fill_status
-        order_record.order_id = getattr(order_obj, 'id', order_record.order_id)
-        order_record.ordno = getattr(order_obj, 'ordno', order_record.ordno)
+        order_record.ordno = status_info.get("ordno", order_record.ordno)
         order_record.fill_quantity = deal_quantity
         order_record.fill_price = fill_avg_price if fill_avg_price > 0 else order_record.fill_price
-        order_record.cancel_quantity = getattr(status_obj, 'cancel_quantity', 0)
+        order_record.cancel_quantity = status_info.get("cancel_quantity", 0)
         order_record.updated_at = datetime.utcnow()
         
         # Update main status based on fill status
@@ -754,7 +745,7 @@ async def recheck_order_status(
             order_record.status = "cancelled"
         elif fill_status == "Failed":
             order_record.status = "failed"
-            order_record.error_message = getattr(status_obj, 'msg', '') or order_record.error_message
+            order_record.error_message = status_info.get("msg", "") or order_record.error_message
         elif fill_status in ("PendingSubmit", "PreSubmitted", "Submitted"):
             order_record.status = "submitted"
         
@@ -768,21 +759,41 @@ async def recheck_order_status(
             "current_fill_status": fill_status,
             "fill_quantity": deal_quantity,
             "fill_price": fill_avg_price,
-            "cancel_quantity": getattr(status_obj, 'cancel_quantity', 0),
-            "order_quantity": getattr(status_obj, 'order_quantity', 0),
-            "deals": [
-                {"seq": getattr(d, 'seq', ''), "price": d.price, "quantity": d.quantity}
-                for d in deals
-            ],
+            "cancel_quantity": status_info.get("cancel_quantity", 0),
+            "order_quantity": status_info.get("order_quantity", 0),
+            "deals": deals,
             "message": f"Status updated: {old_status} -> {order_record.status}",
         }
         
+    except (TimeoutError, ConnectionError) as e:
+        raise HTTPException(status_code=503, detail=f"Trading service unavailable: {e}")
     except Exception as e:
         logger.exception(f"Error re-checking order {order_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error checking order status: {e}")
 
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/health")
+async def health_check():
+    """Check the health of the API and trading worker."""
+    try:
+        queue_client = get_queue_client()
+        worker_healthy = queue_client.check_worker_health()
+        
+        return {
+            "api": "healthy",
+            "trading_worker": "healthy" if worker_healthy else "unhealthy",
+            "redis": "connected",
+        }
+    except Exception as e:
+        return {
+            "api": "healthy",
+            "trading_worker": "unknown",
+            "redis": "disconnected",
+            "error": str(e),
+        }
 
 
 @app.get("/dashboard")
