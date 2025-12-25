@@ -1,0 +1,29 @@
+# Environment files
+.env
+
+# CA Certificates (NEVER commit these!)
+certs/
+*.pfx
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# Logs
+*.log
+shioaji.log
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+.docker/
+
+# Database
+postgres_data/
+

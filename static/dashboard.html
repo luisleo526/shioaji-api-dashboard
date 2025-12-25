@@ -238,6 +238,48 @@
         .alert { padding: 1rem; border-radius: 8px; margin: 1rem 0; }
         .alert-info { background: rgba(0, 217, 255, 0.1); border: 1px solid rgba(0, 217, 255, 0.3); }
         .alert-warning { background: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); }
+        
+        /* Symbol Cards */
+        .symbol-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        .symbol-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        .symbol-card:hover {
+            background: rgba(0, 217, 255, 0.15);
+            border-color: rgba(0, 217, 255, 0.4);
+            transform: translateY(-2px);
+        }
+        .symbol-card.copied {
+            background: rgba(0, 255, 136, 0.2);
+            border-color: rgba(0, 255, 136, 0.5);
+        }
+        .symbol-card.copied .symbol-copy-hint { color: #00ff88; }
+        .symbol-card.copied .symbol-copy-hint::after { content: ' ✓'; }
+        .symbol-name {
+            display: block;
+            font-weight: 600;
+            font-size: 1rem;
+            color: #fff;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        .symbol-copy-hint {
+            display: block;
+            font-size: 0.7rem;
+            color: #71717a;
+            margin-top: 0.35rem;
+        }
     </style>
 </head>
 <body>
@@ -260,6 +302,7 @@
         <div class="tabs">
             <button class="tab active" onclick="switchTab('orders')">📋 委託紀錄</button>
             <button class="tab" onclick="switchTab('positions')">💼 目前持倉</button>
+            <button class="tab" onclick="switchTab('symbols')">📜 可用商品</button>
             <button class="tab" onclick="switchTab('webhook')">🔗 TradingView 設定</button>
         </div>
         
@@ -300,6 +343,25 @@
             </div>
             
             <div id="positionsTable"><div class="empty">請輸入驗證金鑰並點擊「載入資料」查看目前持倉</div></div>
+        </div>
+        
+        <!-- Symbols Tab -->
+        <div id="symbols-tab" class="tab-content">
+            <div class="info-card">
+                <h2>📜 可用交易商品</h2>
+                <p style="color: #a1a1aa; margin-top: 0.5rem;">以下為目前可交易的期貨商品代碼，可直接用於 TradingView 警報設定。</p>
+            </div>
+            
+            <div class="filters">
+                <input type="text" id="symbolSearch" placeholder="搜尋商品代碼..." oninput="filterSymbols()">
+                <button class="btn-primary" onclick="fetchSymbols()">重新載入</button>
+            </div>
+            
+            <div class="stats" id="symbolStats">
+                <div class="stat-card total"><h3>商品總數</h3><div class="value" id="symbolCount">-</div></div>
+            </div>
+            
+            <div id="symbolsTable"><div class="loading">載入中...</div></div>
         </div>
         
         <!-- Webhook Tab -->
@@ -483,6 +545,7 @@ if (longCondition)
     <script>
         let orders = [];
         let positions = [];
+        let symbols = [];
         let currentTab = 'orders';
         const baseUrl = window.location.origin;
         const webhookUrl = baseUrl + '/order';
@@ -490,6 +553,9 @@ if (longCondition)
         
         document.getElementById('webhookUrl').textContent = webhookUrl;
         document.getElementById('webhookUrlReal').textContent = webhookUrlReal;
+        
+        // Load symbols on page load (no auth required)
+        fetchSymbols();
         
         function switchTab(tab) {
             currentTab = tab;
@@ -502,6 +568,7 @@ if (longCondition)
         function loadCurrentTab() {
             if (currentTab === 'orders') fetchOrders();
             else if (currentTab === 'positions') fetchPositions();
+            else if (currentTab === 'symbols') fetchSymbols();
         }
         
         async function fetchOrders() {
@@ -686,6 +753,63 @@ if (longCondition)
             document.getElementById('totalPnl').textContent = (totalPnl >= 0 ? '+' : '') + totalPnl.toLocaleString();
             const pnlCard = document.getElementById('pnlCard');
             pnlCard.className = 'stat-card ' + (totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative');
+        }
+        
+        async function fetchSymbols() {
+            const simulationMode = document.getElementById('simulationMode').checked;
+            document.getElementById('symbolsTable').innerHTML = '<div class="loading">載入中...</div>';
+            
+            try {
+                const response = await fetch(`/symbols?simulation=${simulationMode}`);
+                if (!response.ok) throw new Error('無法取得商品列表');
+                
+                const data = await response.json();
+                symbols = data.symbols || [];
+                renderSymbolsTable();
+                updateSymbolStats();
+                hideError();
+            } catch (error) {
+                document.getElementById('symbolsTable').innerHTML = `<div class="empty" style="color:#ff6b6b">載入失敗: ${error.message}</div>`;
+            }
+        }
+        
+        function filterSymbols() {
+            const search = document.getElementById('symbolSearch').value.toLowerCase();
+            const filtered = symbols.filter(s => s.toLowerCase().includes(search));
+            renderSymbolsTable(filtered);
+        }
+        
+        function renderSymbolsTable(list = symbols) {
+            if (list.length === 0) {
+                document.getElementById('symbolsTable').innerHTML = '<div class="empty">無符合的商品</div>';
+                return;
+            }
+            
+            let html = '<div class="symbol-grid">';
+            for (const symbol of list) {
+                html += `<div class="symbol-card" onclick="copySymbol('${symbol}')">
+                    <span class="symbol-name">${symbol}</span>
+                    <span class="symbol-copy-hint">點擊複製</span>
+                </div>`;
+            }
+            html += '</div>';
+            document.getElementById('symbolsTable').innerHTML = html;
+        }
+        
+        function copySymbol(symbol) {
+            navigator.clipboard.writeText(symbol).then(() => {
+                const cards = document.querySelectorAll('.symbol-card');
+                cards.forEach(card => {
+                    if (card.querySelector('.symbol-name').textContent === symbol) {
+                        card.classList.add('copied');
+                        setTimeout(() => card.classList.remove('copied'), 1500);
+                    }
+                });
+            });
+        }
+        
+        function updateSymbolStats() {
+            document.getElementById('symbolCount').textContent = symbols.length;
         }
         
         function exportCSV() {

@@ -45,6 +45,35 @@ def get_api_client(simulation: bool = True):
         api = sj.Shioaji(simulation=simulation)
         api.login(api_key=api_key, secret_key=secret_key)
         logger.debug("API client logged in successfully")
+        
+        # Activate CA certificate for real trading
+        if not simulation:
+            ca_path = os.getenv("CA_PATH")
+            ca_password = os.getenv("CA_PASSWORD")
+            
+            if not ca_path or not ca_password:
+                logger.error("CA_PATH or CA_PASSWORD not set for real trading")
+                raise LoginError(
+                    "Real trading requires CA certificate. "
+                    "Please set CA_PATH and CA_PASSWORD environment variables."
+                )
+            
+            # Get person_id from account (Taiwan National ID / 身分證字號)
+            # It's automatically available after login
+            accounts = api.list_accounts()
+            if not accounts:
+                raise LoginError("No accounts found after login")
+            
+            person_id = accounts[0].person_id
+            logger.info(f"Activating CA certificate from {ca_path} for person_id={person_id}")
+            
+            result = api.activate_ca(
+                ca_path=ca_path,
+                ca_passwd=ca_password,
+                person_id=person_id,
+            )
+            logger.info(f"CA activation result: {result}")
+        
         return api
     except TokenError as e:
         logger.error(f"Authentication failed: {e}")
