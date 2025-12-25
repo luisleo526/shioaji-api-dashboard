@@ -1,4 +1,6 @@
-shioaji 
+shioaji
 rich
 fastapi[all]
 pydantic
+sqlalchemy
+psycopg2-binary
