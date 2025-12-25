@@ -142,6 +142,30 @@
         
         /* Messages */
         .error-msg { color: #ff6b6b; font-size: 0.875rem; padding: 1rem; background: rgba(255, 107, 107, 0.1); border-radius: 8px; margin-bottom: 1rem; display: none; }
+        
+        /* Simulation Toggle */
+        .simulation-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 193, 7, 0.15);
+            border: 1px solid rgba(255, 193, 7, 0.3);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+        .simulation-toggle:has(input:checked) {
+            background: rgba(0, 255, 136, 0.15);
+            border-color: rgba(0, 255, 136, 0.3);
+        }
+        .simulation-toggle input { 
+            width: 1.1rem; 
+            height: 1.1rem; 
+            accent-color: #00ff88; 
+        }
+        .simulation-toggle span { font-size: 0.875rem; color: #a1a1aa; }
+        .simulation-toggle:has(input:checked) span { color: #00ff88; }
         .loading, .empty { text-align: center; padding: 3rem; color: #a1a1aa; }
         
         /* Webhook Tab Styles */
@@ -177,6 +201,30 @@
             cursor: pointer;
         }
         .copy-btn:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
+        
+        /* Recheck Button */
+        .recheck-btn {
+            padding: 0.35rem 0.65rem;
+            font-size: 0.75rem;
+            background: linear-gradient(135deg, rgba(0, 217, 255, 0.2) 0%, rgba(147, 51, 234, 0.2) 100%);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 6px;
+            color: #00d9ff;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+        }
+        .recheck-btn:hover:not(:disabled) { 
+            background: linear-gradient(135deg, rgba(0, 217, 255, 0.35) 0%, rgba(147, 51, 234, 0.35) 100%);
+            border-color: rgba(0, 217, 255, 0.5);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 217, 255, 0.2);
+        }
+        .recheck-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
         .field-table { margin: 1rem 0; }
         .field-table td { padding: 0.75rem 1rem; }
         .field-table td:first-child { font-weight: 600; color: #00d9ff; white-space: nowrap; }
@@ -199,6 +247,10 @@
         <div class="auth-section">
             <label for="authKey">API 驗證金鑰</label>
             <input type="password" id="authKey" placeholder="請輸入驗證金鑰">
+            <label class="simulation-toggle">
+                <input type="checkbox" id="simulationMode" checked>
+                <span>模擬模式</span>
+            </label>
             <button class="btn-primary" onclick="loadCurrentTab()">載入資料</button>
             <button class="btn-secondary" onclick="exportCSV()">匯出 CSV</button>
         </div>
@@ -527,7 +579,7 @@ if (longCondition)
                 document.getElementById('ordersTable').innerHTML = '<div class="empty">無委託紀錄</div>';
                 return;
             }
-            let html = `<table><thead><tr><th>ID</th><th>商品</th><th>動作</th><th>委託口數</th><th>成交狀態</th><th>成交/價格</th><th>錯誤訊息</th><th>時間</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr><th>ID</th><th>商品</th><th>動作</th><th>委託口數</th><th>成交狀態</th><th>成交/價格</th><th>錯誤訊息</th><th>時間</th><th>操作</th></tr></thead><tbody>`;
             for (const order of orders) {
                 const date = new Date(order.created_at).toLocaleString('zh-TW');
                 const fillStatus = order.fill_status ? (fillStatusLabels[order.fill_status] || order.fill_status) : '-';
@@ -536,7 +588,12 @@ if (longCondition)
                                    order.status === 'failed' ? 'status-failed' :
                                    order.status === 'cancelled' ? 'status-no_action' :
                                    order.status === 'submitted' ? 'status-pending' : 'status-' + order.status;
-                html += `<tr>
+                // Only show recheck button for orders that might need status update
+                const canRecheck = ['submitted', 'pending', 'partial_filled'].includes(order.status);
+                const recheckBtn = canRecheck 
+                    ? `<button class="recheck-btn" onclick="recheckOrder(${order.id})" title="重新查詢狀態">🔄 查詢</button>`
+                    : `<span style="color:#71717a;font-size:0.75rem">-</span>`;
+                html += `<tr id="order-row-${order.id}">
                     <td>${order.id}</td>
                     <td><strong>${order.symbol}</strong></td>
                     <td><span class="action action-${order.action}">${actionLabels[order.action] || order.action}</span></td>
@@ -545,10 +602,61 @@ if (longCondition)
                     <td>${fillInfo}</td>
                     <td>${order.error_message || '-'}</td>
                     <td>${date}</td>
+                    <td>${recheckBtn}</td>
                 </tr>`;
             }
             html += '</tbody></table>';
             document.getElementById('ordersTable').innerHTML = html;
+        }
+        
+        async function recheckOrder(orderId) {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '⏳ 查詢中...';
+            
+            const authKey = document.getElementById('authKey').value;
+            const simulationMode = document.getElementById('simulationMode').checked;
+            
+            if (!authKey) {
+                alert('請先輸入驗證金鑰');
+                btn.disabled = false;
+                btn.textContent = '🔄 查詢';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/orders/${orderId}/recheck?simulation=${simulationMode}`, {
+                    method: 'POST',
+                    headers: { 'X-Auth-Key': authKey }
+                });
+                
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || '查詢失敗');
+                }
+                
+                // Show result
+                let msg = `訂單 #${orderId} 狀態更新:\n`;
+                msg += `• 狀態: ${result.previous_status} → ${result.current_status}\n`;
+                msg += `• 交易所狀態: ${result.current_fill_status}\n`;
+                if (result.fill_quantity > 0) {
+                    msg += `• 成交: ${result.fill_quantity} 口 @ ${result.fill_price?.toFixed(2) || '-'}\n`;
+                }
+                if (result.deals && result.deals.length > 0) {
+                    msg += `• 成交明細: ${result.deals.length} 筆`;
+                }
+                
+                alert(msg);
+                
+                // Refresh orders list
+                await fetchOrders();
+                
+            } catch (error) {
+                alert(`查詢失敗: ${error.message}`);
+                btn.disabled = false;
+                btn.textContent = '🔄 查詢';
+            }
         }
         
         function renderPositionsTable() {

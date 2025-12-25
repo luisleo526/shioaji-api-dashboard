@@ -256,18 +256,31 @@ def check_order_status(api: sj.Shioaji, trade) -> dict:
         - deals: list of deal info (price, quantity, timestamp)
         - fill_avg_price: float (average fill price calculated from deals)
     """
-    logger.debug(f"Checking order status for trade: {trade.order.id if trade else 'None'}")
-    
     if trade is None:
+        logger.warning("check_order_status called with trade=None")
         return {"status": "no_trade", "error": "No trade object provided"}
     
+    order_id = getattr(trade.order, 'id', 'unknown')
+    seqno = getattr(trade.order, 'seqno', 'unknown')
+    
     try:
+        logger.debug(f"Calling api.update_status(trade=...) for order_id={order_id}, seqno={seqno}")
+        
         # update_status() updates trade object in-place, passing trade= for specific trade update
         api.update_status(trade=trade)
         
         # Extract status info from updated trade object
         status_obj = trade.status
         order_obj = trade.order
+        
+        # Get status value - Status is an Enum
+        status_value = status_obj.status.value if hasattr(status_obj.status, 'value') else str(status_obj.status)
+        
+        logger.debug(
+            f"Raw status from exchange: status={status_value}, "
+            f"status_code={getattr(status_obj, 'status_code', '')}, "
+            f"msg={getattr(status_obj, 'msg', '')}"
+        )
         
         # Get deals list for calculating average price
         deals = status_obj.deals if status_obj.deals else []
@@ -280,8 +293,11 @@ def check_order_status(api: sj.Shioaji, trade) -> dict:
         total_qty = sum(d.quantity for d in deals) if deals else 0
         fill_avg_price = total_value / total_qty if total_qty > 0 else 0.0
         
-        # Get status value - Status is an Enum
-        status_value = status_obj.status.value if hasattr(status_obj.status, 'value') else str(status_obj.status)
+        # Log deal details if any
+        if deals:
+            logger.debug(f"Found {len(deals)} deal(s) for order_id={order_id}:")
+            for i, d in enumerate(deals):
+                logger.debug(f"  Deal[{i}]: seq={getattr(d, 'seq', '')}, qty={d.quantity}, price={d.price}, ts={getattr(d, 'ts', 0)}")
         
         result = {
             "status": status_value,
@@ -305,9 +321,8 @@ def check_order_status(api: sj.Shioaji, trade) -> dict:
             ],
         }
         
-        logger.debug(f"Order status result: {result}")
         return result
         
     except Exception as e:
-        logger.error(f"Error checking order status: {e}")
+        logger.exception(f"Error checking order status for order_id={order_id}: {e}")
         return {"status": "error", "error": str(e)}
