@@ -7,24 +7,40 @@
 - 🔗 **TradingView Webhook 整合** - 直接接收 TradingView 警報，自動下單
 - 📊 **Web 控制台** - 美觀的中文介面，查看委託紀錄、持倉狀態
 - 🔄 **訂單狀態追蹤** - 背景自動檢查訂單成交狀態，支援手動重新查詢
-- 🐳 **Docker 部署** - 一鍵部署，包含 PostgreSQL 資料庫
+- 🐳 **Docker 部署** - 一鍵部署，包含 PostgreSQL 資料庫與 Redis
 - 🔐 **API 金鑰驗證** - 保護敏感端點
 - 📜 **商品查詢** - 查看所有可交易的期貨商品代碼
+- 🔌 **Redis 訊息佇列** - 單一連線架構，避免 "Too Many Connections" 問題
 
 ## 🏗️ 系統架構
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   TradingView   │────▶│   FastAPI App   │────▶│    Shioaji      │
-│    Webhook      │     │   (Port 8000)   │     │   (永豐 API)    │
-└─────────────────┘     └────────┬────────┘     └─────────────────┘
-                                 │
-                                 ▼
-                        ┌─────────────────┐
-                        │   PostgreSQL    │
-                        │   (Port 5432)   │
-                        └─────────────────┘
+┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│   TradingView   │ ───► │   FastAPI App   │ ───► │      Redis      │
+│    Webhook      │      │   (Port 9879)   │      │     (Queue)     │
+└─────────────────┘      └────────┬────────┘      └────────┬────────┘
+                                  │                        │
+                                  ▼                        ▼
+                         ┌─────────────────┐      ┌─────────────────┐
+                         │   PostgreSQL    │      │  Trading Worker │
+                         │    (Orders)     │      │  (Single Conn)  │
+                         └─────────────────┘      └────────┬────────┘
+                                                          │
+                                                          ▼
+                                                 ┌─────────────────┐
+                                                 │     Shioaji     │
+                                                 │    (SinoPac)    │
+                                                 └─────────────────┘
 ```
+
+### 元件說明
+
+| 元件 | 說明 |
+|------|------|
+| **FastAPI App** | 處理 HTTP 請求的 API 服務，支援多 worker 擴展 |
+| **Redis** | 訊息佇列，用於 API 與 Trading Worker 之間的通訊 |
+| **Trading Worker** | 專用的交易服務，維護單一 Shioaji 連線 |
+| **PostgreSQL** | 儲存訂單歷史紀錄 |
 
 ## 🚀 快速開始
 
@@ -32,7 +48,7 @@
 
 ```bash
 git clone <your-repo-url>
-cd s-api
+cd shioaji-api-dashboard
 ```
 
 ### 2. 設定環境變數
@@ -60,6 +76,9 @@ DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 POSTGRES_DB=shioaji
+
+# 支援的期貨商品 (可選，預設為 MXF,TXF)
+SUPPORTED_FUTURES=MXF,TXF
 ```
 
 ### 3. 啟動服務
@@ -70,7 +89,22 @@ docker compose up -d
 
 ### 4. 開啟控制台
 
-瀏覽器開啟 http://localhost:8000/dashboard
+瀏覽器開啟 http://localhost:9879/dashboard
+
+### 5. 檢查服務狀態
+
+```bash
+curl http://localhost:9879/health
+```
+
+預期回應：
+```json
+{
+  "api": "healthy",
+  "trading_worker": "healthy",
+  "redis": "connected"
+}
+```
 
 ## 📖 API 端點
 
@@ -88,6 +122,8 @@ docker compose up -d
 
 | 端點 | 方法 | 說明 |
 |------|------|------|
+| `/futures` | GET | 取得所有期貨商品分類 |
+| `/futures/{code}` | GET | 取得特定期貨商品的所有合約 |
 | `/symbols` | GET | 取得所有可交易商品代碼 |
 | `/symbols/{symbol}` | GET | 查詢特定商品詳細資訊 |
 | `/contracts` | GET | 取得所有合約資訊 |
@@ -97,7 +133,7 @@ docker compose up -d
 | 端點 | 方法 | 說明 |
 |------|------|------|
 | `/dashboard` | GET | Web 控制台 |
-| `/health` | GET | 健康檢查 |
+| `/health` | GET | 健康檢查（含 Trading Worker 狀態） |
 | `/docs` | GET | API 文件 (Swagger UI) |
 
 ## 🔗 TradingView 設定
@@ -106,12 +142,12 @@ docker compose up -d
 
 **模擬模式（測試用）：**
 ```
-http://your-domain.com/order
+http://your-domain.com:9879/order
 ```
 
 **實盤模式：**
 ```
-http://your-domain.com/order?simulation=false
+http://your-domain.com:9879/order?simulation=false
 ```
 
 ### 2. Webhook 訊息格式
@@ -119,7 +155,7 @@ http://your-domain.com/order?simulation=false
 ```json
 {
     "action": "{{strategy.order.alert_message}}",
-    "symbol": "MXFJ5",
+    "symbol": "MXF202601",
     "quantity": {{strategy.order.contracts}}
 }
 ```
@@ -203,16 +239,24 @@ Web 控制台提供以下分頁：
 # 安裝依賴
 pip install -r requirements.txt
 
-# 啟動開發伺服器
+# 啟動 Redis (需要先安裝)
+redis-server
+
+# 啟動 Trading Worker
+python trading_worker.py
+
+# 啟動 API 開發伺服器
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 專案結構
 
 ```
-s-api/
+shioaji-api-dashboard/
 ├── main.py              # FastAPI 應用程式
-├── trading.py           # Shioaji 交易邏輯
+├── trading.py           # Shioaji 交易邏輯（共用函數）
+├── trading_queue.py     # Redis 佇列介面
+├── trading_worker.py    # Trading Worker 服務
 ├── database.py          # 資料庫連線
 ├── models.py            # SQLAlchemy 模型
 ├── static/
@@ -221,7 +265,29 @@ s-api/
 ├── docker-compose.yaml  # Docker 編排
 ├── Dockerfile           # Docker 映像
 ├── requirements.txt     # Python 依賴
-└── example.env          # 環境變數範本
+└── .env                 # 環境變數 (gitignored)
+```
+
+### Docker 服務
+
+| 服務 | 說明 | Port |
+|------|------|------|
+| `api` | FastAPI 應用（4 workers） | 9879 |
+| `trading-worker` | Shioaji 連線管理 | - |
+| `redis` | 訊息佇列 | 6379 (internal) |
+| `db` | PostgreSQL 資料庫 | 5432 (internal) |
+
+### 查看日誌
+
+```bash
+# 查看所有服務日誌
+docker compose logs -f
+
+# 查看 Trading Worker 日誌
+docker compose logs -f trading-worker
+
+# 查看 API 日誌
+docker compose logs -f api
 ```
 
 ## 📝 訂單狀態說明
@@ -242,14 +308,43 @@ s-api/
 2. **憑證安全** - 請勿將 `.env` 和 `certs/` 資料夾提交至版本控制
 3. **網路安全** - 建議使用 HTTPS 和防火牆保護 API 端點
 4. **交易風險** - 自動交易有風險，請謹慎使用
+5. **連線限制** - 系統使用 Redis 佇列確保只維持單一 Shioaji 連線，避免 "Too Many Connections" 錯誤
+
+## 🔧 故障排除
+
+### Trading Worker 無法連線
+
+```bash
+# 檢查服務狀態
+docker compose ps
+
+# 重啟 Trading Worker
+docker compose restart trading-worker
+
+# 查看 Worker 日誌
+docker compose logs trading-worker --tail=50
+```
+
+### 訂單狀態卡在 submitted
+
+1. 使用控制台的「重新查詢」按鈕手動更新狀態
+2. 或呼叫 API：`POST /orders/{order_id}/recheck`
+
+### Redis 連線錯誤
+
+```bash
+# 檢查 Redis 狀態
+docker compose exec redis redis-cli ping
+# 應回應 PONG
+```
 
 ## 📚 參考資源
 
 - [Shioaji 官方文件](https://sinotrade.github.io/)
 - [TradingView Webhook 文件](https://www.tradingview.com/support/solutions/43000529348)
 - [FastAPI 文件](https://fastapi.tiangolo.com/)
+- [Redis 文件](https://redis.io/documentation)
 
 ## 📄 授權
 
 MIT License
-
