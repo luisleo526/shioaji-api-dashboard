@@ -2,21 +2,24 @@ from contextlib import asynccontextmanager
 import csv
 from datetime import datetime
 import io
+import logging
 import os
+import time
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 import shioaji as sj
 from sqlalchemy.orm import Session
 
-from database import get_db, init_db
+from database import get_db, init_db, SessionLocal
 from models import OrderHistory
 from trading import (
     LoginError,
     OrderError,
+    check_order_status,
     get_api_client,
     get_contract_from_symbol,
     get_valid_contract_codes,
@@ -24,6 +27,8 @@ from trading import (
     place_entry_order,
     place_exit_order,
 )
+
+logger = logging.getLogger(__name__)
 
 
 ACCEPT_ACTIONS = Literal["long_entry", "long_exit", "short_entry", "short_exit"]
@@ -61,6 +66,11 @@ class OrderHistoryResponse(BaseModel):
     order_result: Optional[str]
     error_message: Optional[str]
     created_at: datetime
+    order_id: Optional[str] = None
+    fill_status: Optional[str] = None
+    fill_quantity: Optional[int] = None
+    fill_price: Optional[float] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -83,6 +93,105 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Background task configuration
+ORDER_STATUS_CHECK_DELAY = 2  # seconds to wait before first check
+ORDER_STATUS_CHECK_INTERVAL = 5  # seconds between retry checks
+ORDER_STATUS_MAX_RETRIES = 120  # max number of status checks (~10 minutes total)
+
+
+def verify_order_fill(
+    order_id: int,
+    trade,
+    simulation: bool,
+):
+    """
+    Background task to verify order fill status.
+    
+    According to Shioaji docs, after placing an order, the status is 'PendingSubmit'.
+    We need to call update_status to get the actual status from the exchange.
+    
+    Ref: https://sinotrade.github.io/zh/tutor/order/FutureOption/#_2
+    """
+    logger.info(f"[BG] Starting order verification for order_id={order_id}")
+    
+    # Wait before first check to allow order to reach exchange
+    time.sleep(ORDER_STATUS_CHECK_DELAY)
+    
+    # Create a new database session for background task
+    db = SessionLocal()
+    
+    try:
+        api = get_api_client(simulation=simulation)
+        
+        for attempt in range(ORDER_STATUS_MAX_RETRIES):
+            logger.debug(f"[BG] Check attempt {attempt + 1}/{ORDER_STATUS_MAX_RETRIES} for order_id={order_id}")
+            
+            status_info = check_order_status(api, trade)
+            fill_status = status_info.get("status", "unknown")
+            
+            # Update database record
+            order_record = db.query(OrderHistory).filter(OrderHistory.id == order_id).first()
+            if order_record:
+                order_record.fill_status = fill_status
+                order_record.order_id = status_info.get("order_id")
+                order_record.seqno = status_info.get("seqno")
+                order_record.ordno = status_info.get("ordno")
+                order_record.fill_quantity = status_info.get("deal_quantity", 0)  # Use deal_quantity from OrderStatus
+                order_record.fill_price = status_info.get("fill_avg_price")
+                order_record.cancel_quantity = status_info.get("cancel_quantity", 0)
+                order_record.updated_at = datetime.utcnow()
+                
+                # Update main status based on fill status
+                if fill_status == "Filled":
+                    order_record.status = "filled"
+                    db.commit()
+                    logger.info(f"[BG] Order {order_id} fully filled: qty={status_info.get('deal_quantity')}, price={status_info.get('fill_avg_price')}")
+                    break
+                elif fill_status == "PartFilled":
+                    order_record.status = "partial_filled"
+                    db.commit()
+                    logger.info(f"[BG] Order {order_id} partially filled: qty={status_info.get('deal_quantity')}/{status_info.get('order_quantity')}")
+                    # Continue checking for more fills
+                elif fill_status == "Cancelled":
+                    order_record.status = "cancelled"
+                    db.commit()
+                    logger.info(f"[BG] Order {order_id} cancelled: cancel_qty={status_info.get('cancel_quantity')}")
+                    break
+                elif fill_status == "Inactive":
+                    order_record.status = "cancelled"
+                    db.commit()
+                    logger.info(f"[BG] Order {order_id} inactive (expired/rejected)")
+                    break
+                elif fill_status in ("PendingSubmit", "PreSubmitted", "Submitted"):
+                    order_record.status = "submitted"
+                    db.commit()
+                    logger.debug(f"[BG] Order {order_id} still pending: {fill_status}")
+                    # Continue checking
+                elif fill_status == "Failed":
+                    order_record.status = "failed"
+                    order_record.error_message = status_info.get("msg") or status_info.get("error", "Order failed at exchange")
+                    db.commit()
+                    logger.error(f"[BG] Order {order_id} failed at exchange: {status_info.get('msg')}")
+                    break
+                else:
+                    db.commit()
+                    logger.debug(f"[BG] Order {order_id} unknown status: {fill_status}")
+            
+            # Wait before next check
+            time.sleep(ORDER_STATUS_CHECK_INTERVAL)
+        
+        # Final status after all retries
+        if order_record and order_record.status == "submitted":
+            logger.warning(f"[BG] Order {order_id} still not filled after {ORDER_STATUS_MAX_RETRIES} checks")
+            
+    except LoginError as e:
+        logger.error(f"[BG] Failed to login for order verification: {e}")
+    except Exception as e:
+        logger.error(f"[BG] Error verifying order {order_id}: {e}")
+    finally:
+        db.close()
 
 
 @app.get("/symbols")
@@ -172,14 +281,25 @@ async def list_positions(
 @app.post("/order")
 async def create_order(
     order_request: OrderRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     simulation: bool = Query(True, description="Use simulation mode (default: True)"),
 ):
+    """
+    Place a trading order. The order is submitted and a background task verifies
+    the actual fill status from the exchange.
+    
+    According to Shioaji docs, after place_order returns, the status is 'PendingSubmit'.
+    The background task calls update_status to get the actual status (Filled, Cancelled, etc.).
+    
+    Ref: https://sinotrade.github.io/zh/tutor/order/FutureOption/#_2
+    """
     order_history = OrderHistory(
         symbol=order_request.symbol,
         action=order_request.action,
         quantity=order_request.quantity,
         status="pending",
+        fill_status="PendingSubmit",
     )
 
     try:
@@ -191,6 +311,7 @@ async def create_order(
         db.commit()
         raise HTTPException(status_code=503, detail=str(e))
 
+    result = None
     try:
         if order_request.action == "long_entry":
             result = place_entry_order(
@@ -217,16 +338,38 @@ async def create_order(
 
     if result is None:
         order_history.status = "no_action"
+        order_history.fill_status = None
         db.add(order_history)
         db.commit()
         return {"status": "no_action", "message": "No position to exit or invalid action"}
 
-    order_history.status = "success"
+    # Extract order info from trade result
+    if hasattr(result, 'order') and result.order:
+        order_history.order_id = result.order.id if hasattr(result.order, 'id') else None
+        order_history.seqno = result.order.seqno if hasattr(result.order, 'seqno') else None
+        order_history.ordno = result.order.ordno if hasattr(result.order, 'ordno') else None
+
+    # Initial status is "submitted" (order accepted, pending verification)
+    order_history.status = "submitted"
     order_history.order_result = str(result)
     db.add(order_history)
     db.commit()
+    db.refresh(order_history)
+    
+    # Spawn background task to verify fill status
+    background_tasks.add_task(
+        verify_order_fill,
+        order_id=order_history.id,
+        trade=result,
+        simulation=simulation,
+    )
 
-    return {"status": "success", "order": str(result)}
+    return {
+        "status": "submitted",
+        "order_id": order_history.id,
+        "message": "Order submitted. Fill status will be verified in background.",
+        "order": str(result),
+    }
 
 
 @app.get("/orders", response_model=list[OrderHistoryResponse])

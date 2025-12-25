@@ -235,3 +235,79 @@ def place_exit_order(api: sj.Shioaji, symbol: str, position_direction: sj.consta
     except Exception as e:
         logger.error(f"Unexpected error when placing order: {e}")
         raise OrderError(f"Unexpected error when placing order: {e}") from e
+
+
+def check_order_status(api: sj.Shioaji, trade) -> dict:
+    """
+    Check the actual fill status of an order by calling update_status.
+    
+    According to Shioaji source code:
+    - update_status() updates the trade object in-place (doesn't return anything)
+    - OrderStatus has: status, deal_quantity, cancel_quantity, deals, order_quantity
+    - Status enum: PendingSubmit, PreSubmitted, Submitted, PartFilled, Filled, Cancelled, Failed, Inactive
+    
+    Ref: https://sinotrade.github.io/zh/tutor/order/FutureOption/#_2
+    
+    Returns a dict with:
+        - status: str (PendingSubmit, Submitted, Filled, PartFilled, Cancelled, Failed, Inactive)
+        - order_quantity: int
+        - deal_quantity: int (filled quantity from OrderStatus)
+        - cancel_quantity: int
+        - deals: list of deal info (price, quantity, timestamp)
+        - fill_avg_price: float (average fill price calculated from deals)
+    """
+    logger.debug(f"Checking order status for trade: {trade.order.id if trade else 'None'}")
+    
+    if trade is None:
+        return {"status": "no_trade", "error": "No trade object provided"}
+    
+    try:
+        # update_status() updates trade object in-place, passing trade= for specific trade update
+        api.update_status(trade=trade)
+        
+        # Extract status info from updated trade object
+        status_obj = trade.status
+        order_obj = trade.order
+        
+        # Get deals list for calculating average price
+        deals = status_obj.deals if status_obj.deals else []
+        
+        # Use deal_quantity from OrderStatus (this is the official filled quantity)
+        deal_quantity = status_obj.deal_quantity if hasattr(status_obj, 'deal_quantity') else 0
+        
+        # Calculate average fill price from deals
+        total_value = sum(d.price * d.quantity for d in deals) if deals else 0
+        total_qty = sum(d.quantity for d in deals) if deals else 0
+        fill_avg_price = total_value / total_qty if total_qty > 0 else 0.0
+        
+        # Get status value - Status is an Enum
+        status_value = status_obj.status.value if hasattr(status_obj.status, 'value') else str(status_obj.status)
+        
+        result = {
+            "status": status_value,
+            "status_code": getattr(status_obj, 'status_code', ''),
+            "msg": getattr(status_obj, 'msg', ''),
+            "order_id": getattr(order_obj, 'id', ''),
+            "seqno": getattr(order_obj, 'seqno', ''),
+            "ordno": getattr(order_obj, 'ordno', ''),
+            "order_quantity": getattr(status_obj, 'order_quantity', 0) or order_obj.quantity,
+            "deal_quantity": deal_quantity,
+            "cancel_quantity": getattr(status_obj, 'cancel_quantity', 0),
+            "fill_avg_price": fill_avg_price,
+            "deals": [
+                {
+                    "seq": getattr(d, 'seq', ''),
+                    "price": d.price,
+                    "quantity": d.quantity,
+                    "ts": getattr(d, 'ts', 0),
+                }
+                for d in deals
+            ],
+        }
+        
+        logger.debug(f"Order status result: {result}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error checking order status: {e}")
+        return {"status": "error", "error": str(e)}

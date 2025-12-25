@@ -129,6 +129,9 @@
         .status-success { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
         .status-failed { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
         .status-no_action { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+        .status-pending, .status-submitted { background: rgba(0, 217, 255, 0.2); color: #00d9ff; }
+        .status-partial_filled { background: rgba(147, 51, 234, 0.2); color: #a855f7; }
+        .status-cancelled { background: rgba(161, 161, 170, 0.2); color: #a1a1aa; }
         .action { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
         .action-long_entry, .direction-buy { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
         .action-long_exit { background: rgba(0, 217, 255, 0.2); color: #00d9ff; }
@@ -498,7 +501,25 @@ if (longCondition)
         }
         
         const actionLabels = { long_entry: '做多進場', long_exit: '做多出場', short_entry: '做空進場', short_exit: '做空出場' };
-        const statusLabels = { success: '成功', failed: '失敗', no_action: '無動作' };
+        const statusLabels = { 
+            pending: '待處理', 
+            submitted: '已送出', 
+            filled: '已成交', 
+            partial_filled: '部分成交',
+            cancelled: '已取消',
+            failed: '失敗', 
+            no_action: '無動作',
+            success: '成功'  // legacy
+        };
+        const fillStatusLabels = {
+            PendingSubmit: '待送出',
+            PreSubmitted: '預送出',
+            Submitted: '委託中',
+            Filled: '已成交',
+            PartFilled: '部分成交',
+            Cancelled: '已取消',
+            Failed: '失敗'
+        };
         const dirLabels = { buy: '買', sell: '賣', Buy: '買', Sell: '賣' };
         
         function renderOrdersTable() {
@@ -506,10 +527,25 @@ if (longCondition)
                 document.getElementById('ordersTable').innerHTML = '<div class="empty">無委託紀錄</div>';
                 return;
             }
-            let html = `<table><thead><tr><th>ID</th><th>商品</th><th>動作</th><th>口數</th><th>狀態</th><th>錯誤訊息</th><th>時間</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr><th>ID</th><th>商品</th><th>動作</th><th>委託口數</th><th>成交狀態</th><th>成交/價格</th><th>錯誤訊息</th><th>時間</th></tr></thead><tbody>`;
             for (const order of orders) {
                 const date = new Date(order.created_at).toLocaleString('zh-TW');
-                html += `<tr><td>${order.id}</td><td><strong>${order.symbol}</strong></td><td><span class="action action-${order.action}">${actionLabels[order.action] || order.action}</span></td><td>${order.quantity}</td><td><span class="status status-${order.status}">${statusLabels[order.status] || order.status}</span></td><td>${order.error_message || '-'}</td><td>${date}</td></tr>`;
+                const fillStatus = order.fill_status ? (fillStatusLabels[order.fill_status] || order.fill_status) : '-';
+                const fillInfo = order.fill_quantity ? `${order.fill_quantity} 口 @ ${order.fill_price?.toLocaleString() || '-'}` : '-';
+                const statusClass = order.status === 'filled' ? 'status-success' : 
+                                   order.status === 'failed' ? 'status-failed' :
+                                   order.status === 'cancelled' ? 'status-no_action' :
+                                   order.status === 'submitted' ? 'status-pending' : 'status-' + order.status;
+                html += `<tr>
+                    <td>${order.id}</td>
+                    <td><strong>${order.symbol}</strong></td>
+                    <td><span class="action action-${order.action}">${actionLabels[order.action] || order.action}</span></td>
+                    <td>${order.quantity}</td>
+                    <td><span class="status ${statusClass}">${statusLabels[order.status] || order.status}</span><br><small style="color:#a1a1aa">${fillStatus}</small></td>
+                    <td>${fillInfo}</td>
+                    <td>${order.error_message || '-'}</td>
+                    <td>${date}</td>
+                </tr>`;
             }
             html += '</tbody></table>';
             document.getElementById('ordersTable').innerHTML = html;
