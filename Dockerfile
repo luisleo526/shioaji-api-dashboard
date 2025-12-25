@@ -13,6 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY main.py .
 COPY trading.py .
+COPY trading_queue.py .
+COPY trading_worker.py .
 COPY database.py .
 COPY models.py .
 COPY static/ ./static/
