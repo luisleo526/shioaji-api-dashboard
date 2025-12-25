@@ -12,7 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 import shioaji as sj
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 from database import get_db, init_db, SessionLocal
 from models import OrderHistory
@@ -114,31 +116,122 @@ def verify_order_fill(
     
     Ref: https://sinotrade.github.io/zh/tutor/order/FutureOption/#_2
     """
-    logger.info(f"[BG] Starting order verification for order_id={order_id}")
+    logger.info(f"[BG] Starting order verification: order_id={order_id}, simulation={simulation}")
     
     # Wait before first check to allow order to reach exchange
+    logger.debug(f"[BG] Waiting {ORDER_STATUS_CHECK_DELAY}s before first check...")
     time.sleep(ORDER_STATUS_CHECK_DELAY)
     
-    # Create a new database session for background task
-    db = SessionLocal()
+    # Database connection with retry logic
+    db = None
+    db_retry_count = 0
+    db_max_retries = 3
+    
+    def get_db_session():
+        """Get a new database session with retry logic."""
+        nonlocal db, db_retry_count
+        for retry in range(db_max_retries):
+            try:
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+                db = SessionLocal()
+                # Test connection
+                db.execute(text("SELECT 1"))
+                db_retry_count = 0
+                return db
+            except OperationalError as e:
+                logger.warning(f"[BG] DB connection failed (attempt {retry + 1}/{db_max_retries}): {e}")
+                time.sleep(2 ** retry)  # Exponential backoff: 1s, 2s, 4s
+        raise OperationalError("Failed to connect to database after retries", None, None)
+    
+    def safe_db_commit():
+        """Safely commit with error handling."""
+        nonlocal db
+        try:
+            db.commit()
+            return True
+        except OperationalError as e:
+            logger.error(f"[BG] DB commit failed (connection error): {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            # Try to reconnect
+            try:
+                db = get_db_session()
+                return False  # Caller should retry the operation
+            except Exception:
+                return False
+        except SQLAlchemyError as e:
+            logger.error(f"[BG] DB commit failed: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return False
+    
+    last_status = None
+    order_record = None
     
     try:
+        # Initialize database connection
+        db = get_db_session()
+        logger.debug(f"[BG] Database connection established")
+        
         api = get_api_client(simulation=simulation)
+        logger.info(f"[BG] API client ready, starting status checks (max {ORDER_STATUS_MAX_RETRIES} checks, {ORDER_STATUS_CHECK_INTERVAL}s interval)")
         
         for attempt in range(ORDER_STATUS_MAX_RETRIES):
-            logger.debug(f"[BG] Check attempt {attempt + 1}/{ORDER_STATUS_MAX_RETRIES} for order_id={order_id}")
-            
             status_info = check_order_status(api, trade)
             fill_status = status_info.get("status", "unknown")
             
-            # Update database record
-            order_record = db.query(OrderHistory).filter(OrderHistory.id == order_id).first()
+            # Log status change or periodic update (every 12 checks = ~1 minute)
+            if fill_status != last_status:
+                logger.info(f"[BG] Order {order_id} status changed: {last_status} -> {fill_status}")
+                last_status = fill_status
+            elif attempt % 12 == 0 and attempt > 0:
+                elapsed = attempt * ORDER_STATUS_CHECK_INTERVAL
+                logger.info(f"[BG] Order {order_id} still {fill_status} after {elapsed}s ({attempt}/{ORDER_STATUS_MAX_RETRIES} checks)")
+            
+            # Log detailed status info at debug level
+            logger.debug(
+                f"[BG] Check {attempt + 1}/{ORDER_STATUS_MAX_RETRIES}: "
+                f"status={fill_status}, "
+                f"deal_qty={status_info.get('deal_quantity', 0)}, "
+                f"cancel_qty={status_info.get('cancel_quantity', 0)}, "
+                f"order_qty={status_info.get('order_quantity', 0)}, "
+                f"seqno={status_info.get('seqno')}, "
+                f"ordno={status_info.get('ordno')}"
+            )
+            
+            # Log deals if any
+            deals = status_info.get("deals", [])
+            if deals:
+                for deal in deals:
+                    logger.info(f"[BG] Order {order_id} DEAL: qty={deal.get('quantity')}, price={deal.get('price')}, ts={deal.get('ts')}")
+            
+            # Update database record with error handling
+            try:
+                order_record = db.query(OrderHistory).filter(OrderHistory.id == order_id).first()
+            except OperationalError as e:
+                logger.warning(f"[BG] DB query failed, reconnecting: {e}")
+                try:
+                    db = get_db_session()
+                    order_record = db.query(OrderHistory).filter(OrderHistory.id == order_id).first()
+                except Exception as reconnect_error:
+                    logger.error(f"[BG] DB reconnect failed: {reconnect_error}")
+                    time.sleep(ORDER_STATUS_CHECK_INTERVAL)
+                    continue
+            
             if order_record:
                 order_record.fill_status = fill_status
                 order_record.order_id = status_info.get("order_id")
                 order_record.seqno = status_info.get("seqno")
                 order_record.ordno = status_info.get("ordno")
-                order_record.fill_quantity = status_info.get("deal_quantity", 0)  # Use deal_quantity from OrderStatus
+                order_record.fill_quantity = status_info.get("deal_quantity", 0)
                 order_record.fill_price = status_info.get("fill_avg_price")
                 order_record.cancel_quantity = status_info.get("cancel_quantity", 0)
                 order_record.updated_at = datetime.utcnow()
@@ -146,52 +239,83 @@ def verify_order_fill(
                 # Update main status based on fill status
                 if fill_status == "Filled":
                     order_record.status = "filled"
-                    db.commit()
-                    logger.info(f"[BG] Order {order_id} fully filled: qty={status_info.get('deal_quantity')}, price={status_info.get('fill_avg_price')}")
-                    break
+                    if safe_db_commit():
+                        logger.info(
+                            f"[BG] ✓ Order {order_id} FILLED: "
+                            f"qty={status_info.get('deal_quantity')}, "
+                            f"avg_price={status_info.get('fill_avg_price')}, "
+                            f"deals={len(deals)}"
+                        )
+                        break
                 elif fill_status == "PartFilled":
                     order_record.status = "partial_filled"
-                    db.commit()
-                    logger.info(f"[BG] Order {order_id} partially filled: qty={status_info.get('deal_quantity')}/{status_info.get('order_quantity')}")
+                    if safe_db_commit():
+                        logger.info(
+                            f"[BG] ~ Order {order_id} PARTIAL: "
+                            f"filled={status_info.get('deal_quantity')}/{status_info.get('order_quantity')}, "
+                            f"avg_price={status_info.get('fill_avg_price')}"
+                        )
                     # Continue checking for more fills
                 elif fill_status == "Cancelled":
                     order_record.status = "cancelled"
-                    db.commit()
-                    logger.info(f"[BG] Order {order_id} cancelled: cancel_qty={status_info.get('cancel_quantity')}")
-                    break
+                    if safe_db_commit():
+                        logger.info(
+                            f"[BG] ✗ Order {order_id} CANCELLED: "
+                            f"cancel_qty={status_info.get('cancel_quantity')}, "
+                            f"msg={status_info.get('msg')}"
+                        )
+                        break
                 elif fill_status == "Inactive":
                     order_record.status = "cancelled"
-                    db.commit()
-                    logger.info(f"[BG] Order {order_id} inactive (expired/rejected)")
-                    break
+                    if safe_db_commit():
+                        logger.info(f"[BG] ✗ Order {order_id} INACTIVE (expired/rejected): msg={status_info.get('msg')}")
+                        break
                 elif fill_status in ("PendingSubmit", "PreSubmitted", "Submitted"):
                     order_record.status = "submitted"
-                    db.commit()
-                    logger.debug(f"[BG] Order {order_id} still pending: {fill_status}")
-                    # Continue checking
+                    safe_db_commit()
+                    # Already logged above
                 elif fill_status == "Failed":
                     order_record.status = "failed"
-                    order_record.error_message = status_info.get("msg") or status_info.get("error", "Order failed at exchange")
-                    db.commit()
-                    logger.error(f"[BG] Order {order_id} failed at exchange: {status_info.get('msg')}")
-                    break
+                    error_msg = status_info.get("msg") or status_info.get("error", "Order failed at exchange")
+                    order_record.error_message = error_msg
+                    if safe_db_commit():
+                        logger.error(f"[BG] ✗ Order {order_id} FAILED: {error_msg}, status_code={status_info.get('status_code')}")
+                        break
+                elif fill_status == "error":
+                    logger.error(f"[BG] Error checking order {order_id}: {status_info.get('error')}")
+                    safe_db_commit()
                 else:
-                    db.commit()
-                    logger.debug(f"[BG] Order {order_id} unknown status: {fill_status}")
+                    safe_db_commit()
+                    logger.warning(f"[BG] Order {order_id} unknown status: {fill_status}")
+            else:
+                logger.error(f"[BG] Order record not found in database: order_id={order_id}")
             
             # Wait before next check
             time.sleep(ORDER_STATUS_CHECK_INTERVAL)
         
         # Final status after all retries
         if order_record and order_record.status == "submitted":
-            logger.warning(f"[BG] Order {order_id} still not filled after {ORDER_STATUS_MAX_RETRIES} checks")
+            total_time = ORDER_STATUS_CHECK_DELAY + (ORDER_STATUS_MAX_RETRIES * ORDER_STATUS_CHECK_INTERVAL)
+            logger.warning(
+                f"[BG] ⚠ Order {order_id} timeout: still '{fill_status}' after {total_time}s "
+                f"({ORDER_STATUS_MAX_RETRIES} checks). Last status_code={status_info.get('status_code')}"
+            )
             
     except LoginError as e:
         logger.error(f"[BG] Failed to login for order verification: {e}")
+    except OperationalError as e:
+        logger.error(f"[BG] Database connection error for order {order_id}: {e}")
+    except SQLAlchemyError as e:
+        logger.error(f"[BG] Database error for order {order_id}: {e}")
     except Exception as e:
-        logger.error(f"[BG] Error verifying order {order_id}: {e}")
+        logger.exception(f"[BG] Error verifying order {order_id}: {e}")
     finally:
-        db.close()
+        if db is not None:
+            try:
+                db.close()
+            except Exception as e:
+                logger.debug(f"[BG] Error closing DB session: {e}")
+        logger.debug(f"[BG] Order {order_id} verification completed")
 
 
 @app.get("/symbols")
@@ -453,6 +577,122 @@ async def export_orders(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=order_history.csv"},
     )
+
+
+@app.post("/orders/{order_id}/recheck")
+async def recheck_order_status(
+    order_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(verify_auth_key),
+    simulation: bool = Query(True, description="Use simulation mode"),
+):
+    """
+    Manually re-check an order's fill status from the exchange.
+    
+    This performs a single status check (not a background loop) and updates the database.
+    Useful for orders where the background task may have timed out or for manual verification.
+    """
+    # Get order from database
+    order_record = db.query(OrderHistory).filter(OrderHistory.id == order_id).first()
+    if not order_record:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+    
+    # Check if order has the necessary info to re-check
+    if not order_record.seqno:
+        raise HTTPException(
+            status_code=400, 
+            detail="Order does not have seqno - cannot re-check status. This may be a failed or no_action order."
+        )
+    
+    try:
+        api = get_api_client(simulation=simulation)
+    except LoginError as e:
+        raise HTTPException(status_code=503, detail=f"Failed to connect to trading API: {e}")
+    
+    # We need to reconstruct a minimal trade object or use list_trades
+    # Since we don't have the original trade object, we'll use api.list_trades() to find it
+    try:
+        api.update_status(api.futopt_account)
+        trades = api.list_trades()
+        
+        # Find the trade by seqno
+        matching_trade = None
+        for trade in trades:
+            if trade.order.seqno == order_record.seqno:
+                matching_trade = trade
+                break
+        
+        if not matching_trade:
+            # Trade not found in current session - might have been from previous session
+            return {
+                "order_id": order_id,
+                "status": "not_found_in_session",
+                "message": "Trade not found in current API session. The order may be from a previous trading session.",
+                "current_db_status": order_record.status,
+                "current_fill_status": order_record.fill_status,
+            }
+        
+        # Get status from the matching trade
+        status_obj = matching_trade.status
+        order_obj = matching_trade.order
+        
+        # Get status value
+        fill_status = status_obj.status.value if hasattr(status_obj.status, 'value') else str(status_obj.status)
+        
+        # Get deals and calculate average price
+        deals = status_obj.deals if status_obj.deals else []
+        deal_quantity = status_obj.deal_quantity if hasattr(status_obj, 'deal_quantity') else 0
+        total_value = sum(d.price * d.quantity for d in deals) if deals else 0
+        total_qty = sum(d.quantity for d in deals) if deals else 0
+        fill_avg_price = total_value / total_qty if total_qty > 0 else 0.0
+        
+        # Update database record
+        old_status = order_record.status
+        old_fill_status = order_record.fill_status
+        
+        order_record.fill_status = fill_status
+        order_record.order_id = getattr(order_obj, 'id', order_record.order_id)
+        order_record.ordno = getattr(order_obj, 'ordno', order_record.ordno)
+        order_record.fill_quantity = deal_quantity
+        order_record.fill_price = fill_avg_price if fill_avg_price > 0 else order_record.fill_price
+        order_record.cancel_quantity = getattr(status_obj, 'cancel_quantity', 0)
+        order_record.updated_at = datetime.utcnow()
+        
+        # Update main status based on fill status
+        if fill_status == "Filled":
+            order_record.status = "filled"
+        elif fill_status == "PartFilled":
+            order_record.status = "partial_filled"
+        elif fill_status in ("Cancelled", "Inactive"):
+            order_record.status = "cancelled"
+        elif fill_status == "Failed":
+            order_record.status = "failed"
+            order_record.error_message = getattr(status_obj, 'msg', '') or order_record.error_message
+        elif fill_status in ("PendingSubmit", "PreSubmitted", "Submitted"):
+            order_record.status = "submitted"
+        
+        db.commit()
+        
+        return {
+            "order_id": order_id,
+            "previous_status": old_status,
+            "previous_fill_status": old_fill_status,
+            "current_status": order_record.status,
+            "current_fill_status": fill_status,
+            "fill_quantity": deal_quantity,
+            "fill_price": fill_avg_price,
+            "cancel_quantity": getattr(status_obj, 'cancel_quantity', 0),
+            "order_quantity": getattr(status_obj, 'order_quantity', 0),
+            "deals": [
+                {"seq": getattr(d, 'seq', ''), "price": d.price, "quantity": d.quantity}
+                for d in deals
+            ],
+            "message": f"Status updated: {old_status} -> {order_record.status}",
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error re-checking order {order_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error checking order status: {e}")
 
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
