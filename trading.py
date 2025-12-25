@@ -1,7 +1,9 @@
 import logging
 import os
+from typing import TYPE_CHECKING
 
 import shioaji as sj
+from shioaji.contracts import Contract
 from shioaji.error import (
     TokenError,
     SystemMaintenance,
@@ -102,7 +104,7 @@ def get_contract_from_contract_code(api: sj.Shioaji, contract_code: str):
     raise ValueError(f"Contract {contract_code} not found")
 
 
-def get_current_position(api: sj.Shioaji, contract: sj.Contract):
+def get_current_position(api: sj.Shioaji, contract: Contract):
     logger.debug(f"Getting current position for contract: {contract.code}")
     for position in api.list_positions(api.futopt_account):
         if contract.code == position.code:

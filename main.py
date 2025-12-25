@@ -1,28 +1,28 @@
+from contextlib import asynccontextmanager
 import csv
+from datetime import datetime
 import io
 import os
-from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from fastapi import Depends, FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy.orm import Session
 import shioaji as sj
+from sqlalchemy.orm import Session
 
 from database import get_db, init_db
 from models import OrderHistory
-from utils import (
-    get_api_client,
-    get_valid_symbols,
-    get_valid_contract_codes,
-    get_contract_from_symbol,
-    place_entry_order,
-    place_exit_order,
+from trading import (
     LoginError,
     OrderError,
+    get_api_client,
+    get_contract_from_symbol,
+    get_valid_contract_codes,
+    get_valid_symbols,
+    place_entry_order,
+    place_exit_order,
 )
 
 
@@ -48,7 +48,7 @@ class OrderRequest(BaseModel):
             if self.symbol not in get_valid_symbols(api):
                 raise ValueError(f"Symbol {self.symbol} is not valid")
         except LoginError as e:
-            raise ValueError(f"Failed to validate symbol: {e}")
+            raise ValueError(f"Failed to validate symbol: {e}") from e
         return self
 
 
