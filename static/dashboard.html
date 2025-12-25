@@ -6,14 +6,23 @@
     <title>自動交易控制台</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html {
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100vw;
+        }
         body {
             font-family: 'Microsoft JhengHei', 'Segoe UI', system-ui, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
             min-height: 100vh;
             color: #e4e4e7;
             padding: 2rem;
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100vw;
+            position: relative;
         }
-        .container { max-width: 1400px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; overflow: hidden; }
         h1 {
             font-size: 2.5rem;
             margin-bottom: 2rem;
@@ -33,17 +42,27 @@
             padding: 1.5rem;
             margin-bottom: 2rem;
             backdrop-filter: blur(10px);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.75rem;
         }
-        .auth-section label { display: block; margin-bottom: 0.5rem; color: #a1a1aa; font-size: 0.875rem; }
-        .auth-section input {
-            width: 300px;
+        .auth-section > label:first-child { 
+            width: 100%;
+            margin-bottom: 0; 
+            color: #a1a1aa; 
+            font-size: 0.875rem; 
+        }
+        .auth-section input[type="password"] {
+            flex: 1;
+            min-width: 200px;
+            max-width: 300px;
             padding: 0.75rem 1rem;
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 8px;
             background: rgba(0, 0, 0, 0.3);
             color: #fff;
             font-size: 1rem;
-            margin-right: 1rem;
         }
         .auth-section input:focus { outline: none; border-color: #00d9ff; box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1); }
         
@@ -86,20 +105,30 @@
             height: 2px;
             background: linear-gradient(90deg, #00d9ff, #00ff88);
         }
-        .tab-content { display: none; }
+        .tab-content { display: none; overflow: hidden; max-width: 100%; }
         .tab-content.active { display: block; }
         
         /* Filters */
-        .filters { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
+        .filters { 
+            display: flex; 
+            gap: 0.75rem; 
+            flex-wrap: wrap; 
+            margin-bottom: 1.5rem;
+            align-items: center;
+        }
         .filters select, .filters input {
-            padding: 0.5rem 1rem;
+            padding: 0.6rem 1rem;
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 8px;
             background: rgba(0, 0, 0, 0.3);
             color: #fff;
             font-size: 0.875rem;
+            min-width: 140px;
         }
         .filters select option { background: #1a1a2e; }
+        .filters button {
+            flex-shrink: 0;
+        }
         
         /* Stats Cards */
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
@@ -175,6 +204,11 @@
             border-radius: 12px;
             padding: 1.5rem;
             margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+        .info-card code {
+            word-break: break-all;
+            font-size: 0.85em;
         }
         .code-block {
             background: rgba(0, 0, 0, 0.4);
@@ -183,11 +217,17 @@
             padding: 1rem;
             font-family: 'Consolas', 'Monaco', monospace;
             font-size: 0.9rem;
-            overflow-x: auto;
+            overflow: hidden;
             position: relative;
             margin: 0.5rem 0;
+            max-width: 100%;
         }
-        .code-block pre { margin: 0; white-space: pre-wrap; }
+        .code-block pre { 
+            margin: 0; 
+            white-space: pre-wrap; 
+            word-break: break-all;
+            overflow-x: auto;
+        }
         .copy-btn {
             position: absolute;
             top: 0.5rem;
@@ -225,16 +265,107 @@
             cursor: not-allowed;
             transform: none;
         }
-        .field-table { margin: 1rem 0; }
-        .field-table td { padding: 0.75rem 1rem; }
-        .field-table td:first-child { font-weight: 600; color: #00d9ff; white-space: nowrap; }
+        /* Modern Field List (replaces table) */
+        .field-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+        .field-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            padding: 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            border-left: 3px solid #00d9ff;
+        }
+        .field-name {
+            font-weight: 600;
+            color: #00d9ff;
+            min-width: 80px;
+            flex-shrink: 0;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        .field-desc {
+            color: #a1a1aa;
+            flex: 1;
+            line-height: 1.5;
+        }
+        .field-desc code {
+            background: rgba(0, 217, 255, 0.15);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.85em;
+            color: #00d9ff;
+        }
+        
+        /* Action Values Grid */
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+        .action-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.875rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            transition: all 0.2s;
+        }
+        .action-item:hover {
+            background: rgba(0, 0, 0, 0.35);
+            transform: translateX(4px);
+        }
+        .action-item .action-desc {
+            color: #e4e4e7;
+            font-size: 0.9rem;
+        }
+        
+        /* Placeholder/Variable List */
+        .var-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+        .var-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            padding: 0.875rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            border-left: 3px solid #00d9ff;
+        }
+        .var-item code {
+            font-family: 'Consolas', 'Monaco', monospace;
+            color: #00d9ff;
+            font-size: 0.9rem;
+        }
+        .var-item .var-desc {
+            color: #a1a1aa;
+            font-size: 0.85rem;
+        }
+        
+        /* Legacy field-table support */
+        .field-table { margin: 1rem 0; width: 100%; border-collapse: separate; border-spacing: 0 0.5rem; }
+        .field-table tr { background: rgba(0, 0, 0, 0.2); border-radius: 10px; }
+        .field-table td { padding: 0.875rem 1rem; vertical-align: middle; }
+        .field-table td:first-child { font-weight: 600; color: #00d9ff; border-radius: 10px 0 0 10px; border-left: 3px solid #00d9ff; }
         .field-table td:nth-child(2) { color: #a1a1aa; }
-        .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
+        .field-table td:last-child { border-radius: 0 10px 10px 0; text-align: right; }
+        
+        .badge { display: inline-block; padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
         .badge-required { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
         .badge-optional { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
-        .example-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: 1rem; }
-        .example-card { background: rgba(0, 0, 0, 0.2); border-radius: 8px; padding: 1rem; }
-        .example-card h4 { color: #00ff88; margin-bottom: 0.5rem; font-size: 0.9rem; }
+        .example-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 1rem; }
+        .example-card { background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 1.25rem; border: 1px solid rgba(255, 255, 255, 0.05); }
+        .example-card h4 { color: #00ff88; margin-bottom: 0.75rem; font-size: 0.95rem; }
         .alert { padding: 1rem; border-radius: 8px; margin: 1rem 0; }
         .alert-info { background: rgba(0, 217, 255, 0.1); border: 1px solid rgba(0, 217, 255, 0.3); }
         .alert-warning { background: rgba(255, 193, 7, 0.1); border: 1px solid rgba(255, 193, 7, 0.3); }
@@ -344,6 +475,354 @@
             font-size: 0.7rem;
             color: #71717a;
             margin-top: 0.35rem;
+        }
+        
+        /* ===== Mobile Responsive Styles ===== */
+        
+        /* Tablet and below (768px) */
+        @media (max-width: 768px) {
+            body { 
+                padding: 1rem; 
+            }
+            
+            h1 { 
+                font-size: 1.5rem; 
+                margin-bottom: 1rem; 
+            }
+            
+            /* Auth Section - Stack vertically */
+            .auth-section {
+                padding: 1rem;
+            }
+            .auth-section input[type="password"] {
+                width: 100%;
+                min-width: 0;
+                max-width: 100%;
+                margin-right: 0;
+                margin-bottom: 0.75rem;
+            }
+            .auth-section label {
+                margin-bottom: 0.5rem;
+            }
+            .auth-section .simulation-toggle {
+                display: flex;
+                margin: 0.75rem 0;
+            }
+            .auth-section button {
+                width: 100%;
+                margin: 0.5rem 0 0 0;
+            }
+            .auth-section .btn-secondary {
+                margin-left: 0;
+            }
+            
+            /* Tabs - Scrollable horizontal */
+            .tabs {
+                overflow-x: auto;
+                overflow-y: hidden;
+                flex-wrap: nowrap;
+                gap: 0;
+                padding-bottom: 0.5rem;
+                -webkit-overflow-scrolling: touch;
+                max-width: 100%;
+                scrollbar-width: none; /* Firefox */
+                -ms-overflow-style: none; /* IE/Edge */
+            }
+            .tabs::-webkit-scrollbar {
+                display: none; /* Chrome/Safari/Opera */
+            }
+            .tab {
+                flex-shrink: 0;
+                padding: 0.75rem 1rem;
+                font-size: 0.85rem;
+                white-space: nowrap;
+            }
+            
+            /* Filters - Stack */
+            .filters {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            .filters select,
+            .filters input,
+            .filters button {
+                width: 100%;
+                min-width: 0;
+                max-width: 100%;
+            }
+            
+            /* Stats - 2 columns */
+            .stats {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.75rem;
+            }
+            .stat-card {
+                padding: 1rem;
+            }
+            .stat-card h3 { 
+                font-size: 0.7rem; 
+            }
+            .stat-card .value { 
+                font-size: 1.25rem; 
+            }
+            
+            /* Tables - Horizontal scroll wrapper */
+            .tab-content {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            table {
+                min-width: 650px;
+                font-size: 0.8rem;
+            }
+            th, td {
+                padding: 0.75rem 0.5rem;
+            }
+            
+            /* Info Cards */
+            .info-card {
+                padding: 1rem;
+                overflow-x: auto;
+            }
+            .info-card h2 {
+                font-size: 1.1rem;
+            }
+            .info-card h3 {
+                font-size: 0.95rem;
+            }
+            .info-card code {
+                font-size: 0.75em;
+            }
+            
+            /* Code blocks */
+            .code-block {
+                font-size: 0.75rem;
+                padding: 0.75rem;
+                overflow: hidden;
+            }
+            .code-block pre {
+                overflow-x: auto;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+            
+            /* Modern field components - Tablet */
+            .field-list {
+                gap: 0.6rem;
+            }
+            .field-item {
+                padding: 0.875rem;
+                gap: 0.75rem;
+            }
+            .action-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 0.6rem;
+            }
+            .var-list {
+                grid-template-columns: 1fr;
+                gap: 0.6rem;
+            }
+            .example-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            /* Toggle for mode switch */
+            #simLabel, #realLabel {
+                font-size: 0.8rem;
+            }
+            
+            /* Example grid */
+            .example-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            /* Symbol grid */
+            .symbol-grid {
+                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                gap: 0.5rem;
+            }
+            .symbol-card {
+                padding: 0.75rem 0.5rem;
+            }
+        }
+        
+        /* Mobile phones (480px and below) */
+        @media (max-width: 480px) {
+            body { 
+                padding: 0.75rem; 
+            }
+            
+            h1 { 
+                font-size: 1.25rem; 
+                text-align: center;
+            }
+            
+            /* Tabs - Smaller */
+            .tab {
+                padding: 0.6rem 0.75rem;
+                font-size: 0.75rem;
+            }
+            
+            /* Stats - Still 2 columns but tighter */
+            .stats {
+                gap: 0.5rem;
+            }
+            .stat-card {
+                padding: 0.75rem;
+            }
+            .stat-card h3 { 
+                font-size: 0.65rem; 
+            }
+            .stat-card .value { 
+                font-size: 1.1rem; 
+            }
+            
+            /* Table adjustments */
+            table {
+                min-width: 550px;
+                font-size: 0.7rem;
+            }
+            th, td {
+                padding: 0.5rem 0.35rem;
+            }
+            
+            /* Smaller headings */
+            .info-card h2 {
+                font-size: 1rem;
+            }
+            .info-card h3 {
+                font-size: 0.9rem;
+            }
+            
+            /* Code blocks */
+            .code-block {
+                font-size: 0.65rem;
+                padding: 0.6rem;
+            }
+            
+            /* Alerts */
+            .alert {
+                padding: 0.75rem;
+                font-size: 0.8rem;
+            }
+            
+            /* Toggle switch - Smaller */
+            .toggle-switch {
+                width: 50px;
+                height: 26px;
+            }
+            .toggle-slider:before {
+                height: 18px;
+                width: 18px;
+            }
+            .toggle-switch input:checked + .toggle-slider:before {
+                transform: translateX(24px);
+            }
+            #simLabel, #realLabel {
+                font-size: 0.7rem;
+            }
+            
+            /* Real trading badge */
+            .real-trading-mode::before {
+                font-size: 0.55rem;
+                padding: 2px 6px;
+                right: 8px;
+                top: -8px;
+            }
+            
+            /* Symbol grid - 3 columns */
+            .symbol-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+            .symbol-card {
+                padding: 0.5rem;
+                font-size: 0.8rem;
+            }
+            .symbol-copy-hint {
+                display: none;
+            }
+            
+            /* Field list - Stack on mobile */
+            .field-list {
+                gap: 0.5rem;
+            }
+            .field-item {
+                flex-direction: column;
+                gap: 0.5rem;
+                padding: 0.875rem;
+            }
+            .field-name {
+                min-width: auto;
+            }
+            .field-desc {
+                font-size: 0.85rem;
+            }
+            .field-item .badge {
+                align-self: flex-start;
+            }
+            
+            /* Action grid - 2 columns on mobile */
+            .action-grid {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+            }
+            .action-item {
+                padding: 0.75rem;
+            }
+            .action-item .action-desc {
+                font-size: 0.85rem;
+            }
+            
+            /* Variable list - Stack on mobile */
+            .var-list {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+            }
+            .var-item {
+                padding: 0.75rem;
+            }
+            .var-item code {
+                font-size: 0.8rem;
+            }
+            .var-item .var-desc {
+                font-size: 0.8rem;
+            }
+            
+            /* Buttons */
+            button {
+                padding: 0.6rem 1rem;
+                font-size: 0.85rem;
+            }
+            
+            /* Recheck button in table */
+            .recheck-btn {
+                padding: 0.3rem 0.5rem;
+                font-size: 0.65rem;
+            }
+        }
+        
+        /* Extra small phones (360px and below) */
+        @media (max-width: 360px) {
+            body { 
+                padding: 0.5rem; 
+            }
+            
+            h1 {
+                font-size: 1.1rem;
+            }
+            
+            .stats {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            
+            .tab {
+                padding: 0.5rem 0.6rem;
+                font-size: 0.7rem;
+            }
+            
+            .symbol-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
         }
     </style>
 </head>
@@ -530,45 +1009,78 @@ if (strategy.position_size < 0)
             
             <div class="info-card">
                 <h3>📋 欄位說明</h3>
-                <table class="field-table">
-                    <tr>
-                        <td>action</td>
-                        <td>交易動作（使用 <code>{{strategy.order.alert_message}}</code> 自動帶入）</td>
-                        <td><span class="badge badge-required">必填</span></td>
-                    </tr>
-                    <tr>
-                        <td>quantity</td>
-                        <td>交易口數（可用 <code>{{strategy.order.contracts}}</code> 或固定數字）</td>
-                        <td><span class="badge badge-required">必填</span></td>
-                    </tr>
-                    <tr>
-                        <td>symbol</td>
-                        <td>商品代碼（如 MXFR1、TXFR1）</td>
-                        <td><span class="badge badge-required">必填</span></td>
-                    </tr>
-                </table>
+                <div class="field-list">
+                    <div class="field-item">
+                        <span class="field-name">action</span>
+                        <span class="field-desc">交易動作（使用 <code>{{strategy.order.alert_message}}</code> 自動帶入）</span>
+                        <span class="badge badge-required">必填</span>
+                    </div>
+                    <div class="field-item">
+                        <span class="field-name">quantity</span>
+                        <span class="field-desc">交易口數（可用 <code>{{strategy.order.contracts}}</code> 或固定數字）</span>
+                        <span class="badge badge-required">必填</span>
+                    </div>
+                    <div class="field-item">
+                        <span class="field-name">symbol</span>
+                        <span class="field-desc">商品代碼（如 MXFR1、TXFR1）</span>
+                        <span class="badge badge-required">必填</span>
+                    </div>
+                </div>
                 
                 <h3 style="margin-top: 1.5rem;">🎯 action 可用值</h3>
-                <table class="field-table">
-                    <tr><td><span class="action action-long_entry">long_entry</span></td><td>做多進場 - 買入開倉</td></tr>
-                    <tr><td><span class="action action-long_exit">long_exit</span></td><td>做多出場 - 賣出平倉</td></tr>
-                    <tr><td><span class="action action-short_entry">short_entry</span></td><td>做空進場 - 賣出開倉</td></tr>
-                    <tr><td><span class="action action-short_exit">short_exit</span></td><td>做空出場 - 買入平倉</td></tr>
-                </table>
+                <div class="action-grid">
+                    <div class="action-item">
+                        <span class="action action-long_entry">long_entry</span>
+                        <span class="action-desc">做多進場 - 買入開倉</span>
+                    </div>
+                    <div class="action-item">
+                        <span class="action action-long_exit">long_exit</span>
+                        <span class="action-desc">做多出場 - 賣出平倉</span>
+                    </div>
+                    <div class="action-item">
+                        <span class="action action-short_entry">short_entry</span>
+                        <span class="action-desc">做空進場 - 賣出開倉</span>
+                    </div>
+                    <div class="action-item">
+                        <span class="action action-short_exit">short_exit</span>
+                        <span class="action-desc">做空出場 - 買入平倉</span>
+                    </div>
+                </div>
             </div>
             
             <div class="info-card">
                 <h3>🔄 TradingView 可用佔位符</h3>
-                <p style="color: #a1a1aa; margin: 0.5rem 0;">以下是 TradingView 警報中可使用的變數：</p>
-                <table class="field-table">
-                    <tr><td><code>{{strategy.order.alert_message}}</code></td><td>Pine Script 中 alert_message 參數的值</td></tr>
-                    <tr><td><code>{{strategy.order.contracts}}</code></td><td>委託的合約數量</td></tr>
-                    <tr><td><code>{{strategy.order.action}}</code></td><td>委託動作（buy/sell）</td></tr>
-                    <tr><td><code>{{strategy.order.price}}</code></td><td>委託價格</td></tr>
-                    <tr><td><code>{{strategy.position_size}}</code></td><td>目前持倉大小</td></tr>
-                    <tr><td><code>{{ticker}}</code></td><td>商品代碼</td></tr>
-                    <tr><td><code>{{time}}</code></td><td>警報觸發時間</td></tr>
-                </table>
+                <p style="color: #a1a1aa; margin: 0.5rem 0 1rem;">以下是 TradingView 警報中可使用的變數：</p>
+                <div class="var-list">
+                    <div class="var-item">
+                        <code>{{strategy.order.alert_message}}</code>
+                        <span class="var-desc">Pine Script 中 alert_message 參數的值</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{strategy.order.contracts}}</code>
+                        <span class="var-desc">委託的合約數量</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{strategy.order.action}}</code>
+                        <span class="var-desc">委託動作（buy/sell）</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{strategy.order.price}}</code>
+                        <span class="var-desc">委託價格</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{strategy.position_size}}</code>
+                        <span class="var-desc">目前持倉大小</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{ticker}}</code>
+                        <span class="var-desc">商品代碼</span>
+                    </div>
+                    <div class="var-item">
+                        <code>{{time}}</code>
+                        <span class="var-desc">警報觸發時間</span>
+                    </div>
+                </div>
             </div>
             
             <div class="info-card">
