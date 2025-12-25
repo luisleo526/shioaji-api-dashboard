@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 import shioaji as sj
 from shioaji.contracts import Contract
@@ -14,6 +14,13 @@ from shioaji.error import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Supported futures products (configurable via ENV)
+# Default: MXF (小台), TXF (大台)
+# Available options: MXF, TXF, EXF, FXF, etc.
+SUPPORTED_FUTURES = os.getenv("SUPPORTED_FUTURES", "MXF,TXF").split(",")
+SUPPORTED_FUTURES = [f.strip().upper() for f in SUPPORTED_FUTURES if f.strip()]
+logger.info(f"Supported futures: {SUPPORTED_FUTURES}")
 
 
 class ShioajiError(Exception):
@@ -89,48 +96,42 @@ def get_api_client(simulation: bool = True):
         raise LoginError(f"Unexpected error during login: {e}") from e
 
 
-def get_valid_symbols(api: sj.Shioaji):
-    return [
-        contract.symbol
-        for contract in api.Contracts.Futures.MXF
-        if contract.symbol.startswith("MXF")
-    ] + [
-        contract.symbol
-        for contract in api.Contracts.Futures.TXF
-        if contract.symbol.startswith("TXF")
-    ]
+def _get_futures_contracts(api: sj.Shioaji) -> List[Contract]:
+    """Get all contracts from supported futures products."""
+    contracts = []
+    for product in SUPPORTED_FUTURES:
+        product_contracts = getattr(api.Contracts.Futures, product, None)
+        if product_contracts:
+            contracts.extend([c for c in product_contracts if c.symbol.startswith(product)])
+        else:
+            logger.warning(f"Futures product '{product}' not found in api.Contracts.Futures")
+    return contracts
 
 
-def get_valid_contract_codes(api: sj.Shioaji):
-    return [
-        contract.code
-        for contract in api.Contracts.Futures.MXF
-        if contract.code.startswith("MXF")
-    ] + [
-        contract.code
-        for contract in api.Contracts.Futures.TXF
-        if contract.code.startswith("TXF")
-    ]
+def get_valid_symbols(api: sj.Shioaji) -> List[str]:
+    """Get all valid trading symbols from supported futures."""
+    return [contract.symbol for contract in _get_futures_contracts(api)]
 
 
-def get_contract_from_symbol(api: sj.Shioaji, symbol: str):
-    for contract in api.Contracts.Futures.MXF:
+def get_valid_contract_codes(api: sj.Shioaji) -> List[str]:
+    """Get all valid contract codes from supported futures."""
+    return [contract.code for contract in _get_futures_contracts(api)]
+
+
+def get_contract_from_symbol(api: sj.Shioaji, symbol: str) -> Contract:
+    """Find a contract by its symbol."""
+    for contract in _get_futures_contracts(api):
         if contract.symbol == symbol:
             return contract
-    for contract in api.Contracts.Futures.TXF:
-        if contract.symbol == symbol:
-            return contract
-    raise ValueError(f"Contract {symbol} not found")
+    raise ValueError(f"Contract {symbol} not found in supported futures: {SUPPORTED_FUTURES}")
 
 
-def get_contract_from_contract_code(api: sj.Shioaji, contract_code: str):
-    for contract in api.Contracts.Futures.MXF:
+def get_contract_from_contract_code(api: sj.Shioaji, contract_code: str) -> Contract:
+    """Find a contract by its contract code."""
+    for contract in _get_futures_contracts(api):
         if contract.code == contract_code:
             return contract
-    for contract in api.Contracts.Futures.TXF:
-        if contract.code == contract_code:
-            return contract
-    raise ValueError(f"Contract {contract_code} not found")
+    raise ValueError(f"Contract {contract_code} not found in supported futures: {SUPPORTED_FUTURES}")
 
 
 def get_current_position(api: sj.Shioaji, contract: Contract):

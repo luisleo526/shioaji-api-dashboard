@@ -318,11 +318,98 @@ def verify_order_fill(
         logger.debug(f"[BG] Order {order_id} verification completed")
 
 
+@app.get("/futures")
+async def list_futures_products(
+    simulation: bool = Query(True, description="Use simulation mode"),
+):
+    """
+    Get all available futures products (first level).
+    
+    Returns a list of product codes (e.g., TXF, MXF, EXF) with their names.
+    Use /futures/{code} to see all contracts for a specific product.
+    """
+    try:
+        api = get_api_client(simulation=simulation)
+        futures = api.Contracts.Futures
+        
+        products = []
+        for attr in dir(futures):
+            if attr.startswith('_'):
+                continue
+            product = getattr(futures, attr, None)
+            if product and hasattr(product, '__iter__'):
+                contracts = list(product)
+                if contracts:
+                    first = contracts[0]
+                    products.append({
+                        "code": attr,
+                        "name": getattr(first, 'name', 'N/A'),
+                        "contract_count": len(contracts),
+                    })
+        
+        # Sort by code
+        products.sort(key=lambda x: x['code'])
+        
+        return {
+            "products": products,
+            "count": len(products),
+        }
+    except LoginError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/futures/{code}")
+async def list_futures_contracts(
+    code: str,
+    simulation: bool = Query(True, description="Use simulation mode"),
+):
+    """
+    Get all contracts for a specific futures product (second level).
+    
+    Example: /futures/TXF returns all TXF contracts (TXFK5, TXFL5, etc.)
+    """
+    try:
+        api = get_api_client(simulation=simulation)
+        futures = api.Contracts.Futures
+        
+        # Get the product by code (case-insensitive)
+        product = getattr(futures, code.upper(), None)
+        if not product:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Futures product '{code}' not found. Use /futures to see available products."
+            )
+        
+        contracts = []
+        for contract in product:
+            contracts.append({
+                "symbol": contract.symbol,
+                "code": contract.code,
+                "name": contract.name,
+                "delivery_month": contract.delivery_month,
+                "delivery_date": contract.delivery_date,
+                "underlying_kind": contract.underlying_kind,
+                "unit": contract.unit,
+                "limit_up": contract.limit_up,
+                "limit_down": contract.limit_down,
+                "reference": contract.reference,
+            })
+        
+        return {
+            "product_code": code.upper(),
+            "product_name": contracts[0]['name'] if contracts else 'N/A',
+            "contracts": contracts,
+            "count": len(contracts),
+        }
+    except LoginError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/symbols")
 async def list_symbols(
     simulation: bool = Query(True, description="Use simulation mode"),
 ):
-    """Get list of valid trading symbols (e.g., MXF, TXF futures)."""
+    """Get list of valid trading symbols from SUPPORTED_FUTURES (configured in ENV)."""
     try:
         api = get_api_client(simulation=simulation)
         symbols = get_valid_symbols(api)
