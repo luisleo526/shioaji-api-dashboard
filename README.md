@@ -67,19 +67,15 @@ SECRET_KEY=your_shioaji_secret_key_here
 # 控制台驗證金鑰 (自訂一個安全的密碼)
 AUTH_KEY=your_secure_auth_key_here
 
+# 支援的期貨商品 (可選，預設為 MXF,TXF)
+SUPPORTED_FUTURES=MXF,TXF
+
 # CA 憑證 (僅實盤交易需要)
 CA_PATH=/app/certs/Sinopac.pfx
 CA_PASSWORD=your_ca_password_here
-
-# 資料庫設定
-DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=shioaji
-
-# 支援的期貨商品 (可選，預設為 MXF,TXF)
-SUPPORTED_FUTURES=MXF,TXF
 ```
+
+> 💡 **注意：** 資料庫連線設定 (DATABASE_URL, POSTGRES_*) 已在 docker-compose.yaml 中預設，無需手動設定。
 
 ### 3. 啟動服務
 
