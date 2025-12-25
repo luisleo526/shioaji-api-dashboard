@@ -15,6 +15,7 @@ COPY main.py .
 COPY trading.py .
 COPY database.py .
 COPY models.py .
+COPY static/ ./static/
 
 # Expose port
 EXPOSE 8000
