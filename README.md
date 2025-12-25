@@ -25,8 +25,8 @@
                          │   PostgreSQL    │      │  Trading Worker │
                          │    (Orders)     │      │  (Single Conn)  │
                          └─────────────────┘      └────────┬────────┘
-                                                          │
-                                                          ▼
+                                                           │
+                                                           ▼
                                                  ┌─────────────────┐
                                                  │     Shioaji     │
                                                  │    (SinoPac)    │
