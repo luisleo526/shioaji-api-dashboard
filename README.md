@@ -53,6 +53,7 @@
 ```bash
 git clone <your-repo-url>
 cd shioaji-api-dashboard
+chmod +x shioaji-cli.sh  # 設定執行權限
 ```
 
 ### 2. 設定環境變數
@@ -84,17 +85,22 @@ CA_PASSWORD=your_ca_password_here
 ### 3. 啟動服務
 
 ```bash
-docker compose up -d
+./shioaji-cli.sh start
 ```
 
 ### 4. 開啟控制台
 
 瀏覽器開啟 http://localhost:9879/dashboard
 
+或使用指令自動開啟：
+```bash
+./shioaji-cli.sh dashboard
+```
+
 ### 5. 檢查服務狀態
 
 ```bash
-curl http://localhost:9879/health
+./shioaji-cli.sh health
 ```
 
 預期回應：
@@ -288,7 +294,26 @@ shioaji-api-dashboard/
 | `redis` | 訊息佇列 | 6379 (internal) |
 | `db` | PostgreSQL 資料庫 | 5432 (internal) |
 
-### 查看日誌
+### CLI 指令
+
+系統提供友善的命令列工具 `shioaji-cli.sh`：
+
+| 指令 | 說明 |
+|------|------|
+| `./shioaji-cli.sh start` | 啟動所有服務 |
+| `./shioaji-cli.sh stop` | 停止所有服務 |
+| `./shioaji-cli.sh restart` | 重啟所有服務 |
+| `./shioaji-cli.sh status` | 查看服務狀態 |
+| `./shioaji-cli.sh health` | 檢查系統健康狀態 |
+| `./shioaji-cli.sh logs` | 查看所有日誌 |
+| `./shioaji-cli.sh logs-api` | 只看 API 日誌 |
+| `./shioaji-cli.sh logs-worker` | 只看 Trading Worker 日誌 |
+| `./shioaji-cli.sh dashboard` | 開啟控制台 |
+| `./shioaji-cli.sh reset` | 重置資料庫（清除所有資料） |
+| `./shioaji-cli.sh update` | 更新並重建系統 |
+| `./shioaji-cli.sh help` | 顯示說明 |
+
+### 查看日誌（傳統方式）
 
 ```bash
 # 查看所有服務日誌
@@ -354,7 +379,7 @@ docker compose exec redis redis-cli ping
 如果需要清除所有資料，重新開始：
 
 ```bash
-./db/reset.sh
+./shioaji-cli.sh reset
 ```
 
 **手動重置：**
