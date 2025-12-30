@@ -1376,11 +1376,11 @@ if (strategy.position_size < 0)
                 document.getElementById('positionsTable').innerHTML = '<div class="empty">目前無持倉</div>';
                 return;
             }
-            let html = `<table><thead><tr><th>商品代碼</th><th>方向</th><th>口數</th><th>均價</th><th>現價</th><th>損益</th></tr></thead><tbody>`;
+            let html = `<table><thead><tr><th>商品</th><th>方向</th><th>口數</th><th>均價</th><th>現價</th><th>損益</th></tr></thead><tbody>`;
             for (const pos of positions) {
                 const pnlClass = pos.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
                 const dirClass = pos.direction.toLowerCase() === 'buy' ? 'direction-buy' : 'direction-sell';
-                html += `<tr><td><strong>${pos.code}</strong></td><td><span class="direction ${dirClass}">${dirLabels[pos.direction] || pos.direction}</span></td><td>${pos.quantity}</td><td>${pos.price.toLocaleString()}</td><td>${pos.last_price.toLocaleString()}</td><td class="${pnlClass}">${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toLocaleString()}</td></tr>`;
+                html += `<tr><td><strong>${pos.symbol}</strong></td><td><span class="direction ${dirClass}">${dirLabels[pos.direction] || pos.direction}</span></td><td>${pos.quantity}</td><td>${pos.price.toLocaleString()}</td><td>${pos.last_price.toLocaleString()}</td><td class="${pnlClass}">${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toLocaleString()}</td></tr>`;
             }
             html += '</tbody></table>';
             document.getElementById('positionsTable').innerHTML = html;
