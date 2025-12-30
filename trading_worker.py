@@ -44,7 +44,6 @@ from trading import (
     get_valid_symbols,
     get_valid_contract_codes,
     get_contract_from_symbol,
-    get_contract_from_contract_code,
     get_current_position,
 )
 
@@ -392,15 +391,22 @@ class TradingWorker:
 
             elif operation == TradingOperation.GET_POSITIONS.value:
                 positions = api.list_positions(api.futopt_account)
+                
+                # Build code-to-symbol mapping from ALL futures contracts
+                code_to_symbol = {}
+                for product_name in dir(api.Contracts.Futures):
+                    if product_name.startswith("_"):
+                        continue
+                    product = getattr(api.Contracts.Futures, product_name)
+                    if hasattr(product, "__iter__"):
+                        for contract in product:
+                            if hasattr(contract, "code") and hasattr(contract, "symbol"):
+                                code_to_symbol[contract.code] = contract.symbol
+                
                 positions_data = []
                 for p in positions:
-                    # Look up symbol from contract code
-                    try:
-                        contract = get_contract_from_contract_code(api, p.code)
-                        symbol = contract.symbol
-                    except ValueError:
-                        # Contract not in supported futures, use code as fallback
-                        symbol = p.code
+                    # Look up symbol from code (fallback to code if not found)
+                    symbol = code_to_symbol.get(p.code, p.code)
                     
                     positions_data.append({
                         "id": getattr(p, "id", ""),
