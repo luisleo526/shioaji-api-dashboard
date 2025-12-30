@@ -4,12 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>自動交易控制台</title>
-    <script>
-        // Cache busting: append timestamp to CSS/JS URLs
-        const cacheBuster = Date.now();
-        document.write('<link rel="stylesheet" href="/static/css/dashboard.css?v=' + cacheBuster + '">');
-    </script>
-    <noscript><link rel="stylesheet" href="/static/css/dashboard.css"></noscript>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
     <div class="container">
@@ -93,7 +88,7 @@
                 <div class="stat-card total"><h3>商品總數</h3><div class="value" id="symbolCount">-</div></div>
             </div>
             
-            <div id="symbolsTable"><div class="loading">載入中...</div></div>
+            <div id="symbolsTable"><div class="empty">點擊「重新載入」取得商品列表</div></div>
         </div>
         
         <!-- Webhook Tab -->
@@ -329,11 +324,6 @@ if (strategy.position_size < 0)
         </div>
     </div>
     
-    <script>
-        // Cache busting for JS
-        const script = document.createElement('script');
-        script.src = '/static/js/dashboard.js?v=' + Date.now();
-        document.body.appendChild(script);
-    </script>
+    <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

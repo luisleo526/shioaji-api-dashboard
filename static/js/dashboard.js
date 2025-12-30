@@ -80,7 +80,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') loadCurrentTab(); 
     });
     
-    fetchSymbols();
+    // Don't auto-fetch symbols on page load - let user click to load
+    // This avoids slow initial page load
 });
 
 // Trading Mode Toggle
