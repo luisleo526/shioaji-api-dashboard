@@ -1,16 +1,18 @@
 services:
-  # Database migration service - runs once before api starts
+  # Database migration service - runs SQL migrations before api starts
+  # Uses PostgreSQL image directly for native psql access
   db-migrate:
-    build: .
-    command: bash /app/scripts/migrate.sh upgrade head
+    image: postgres:16-alpine
+    command: bash /db/migrate.sh
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shioaji
+      PGHOST: db
+      PGPASSWORD: postgres
+      MIGRATIONS_DIR: /db/migrations
     volumes:
-      - ./migrations:/app/migrations:ro
-      - ./scripts:/app/scripts:ro
-      - ./alembic.ini:/app/alembic.ini:ro
-      - ./database.py:/app/database.py:ro
-      - ./models.py:/app/models.py:ro
+      - ./db:/db:ro
     depends_on:
       db:
         condition: service_healthy
