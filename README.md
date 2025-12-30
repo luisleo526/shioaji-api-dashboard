@@ -2,6 +2,10 @@
 
 基於 [Shioaji](https://sinotrade.github.io/) 的自動交易 API 服務，專為 TradingView Webhook 設計，可自動執行台灣期貨交易。
 
+<p align="center">
+  <img src="docs/images/dashboard-orders.png" alt="委託紀錄" width="100%">
+</p>
+
 ## ✨ 功能特色
 
 - 🔗 **TradingView Webhook 整合** - 直接接收 TradingView 警報，自動下單
@@ -133,6 +137,10 @@ curl http://localhost:9879/health
 | `/docs` | GET | API 文件 (Swagger UI) |
 
 ## 🔗 TradingView 設定
+
+<p align="center">
+  <img src="docs/images/dashboard-webhook.png" alt="TradingView 設定指南" width="100%">
+</p>
 
 ### 1. Webhook URL
 
@@ -351,3 +359,18 @@ docker compose exec redis redis-cli ping
 ## 📄 授權
 
 MIT License
+
+---
+
+## 💼 客製化服務
+
+如需客製化開發、企業級支援或技術諮詢，歡迎聯繫：
+
+📧 **Email:** `your-email@example.com`
+
+提供服務包括：
+- 🔧 客製化功能開發
+- 🏢 企業部署支援
+- 📊 交易策略整合
+- 🛡️ 安全性強化
+- 📈 效能優化
