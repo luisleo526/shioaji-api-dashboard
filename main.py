@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
-from database import get_db, init_db, SessionLocal
+from database import get_db, SessionLocal
 from models import OrderHistory
 from trading_queue import get_queue_client, TradingQueueClient
 
@@ -66,8 +66,7 @@ class OrderHistoryResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    init_db()
+    # Startup - database migrations are handled by separate migration service
     yield
     # Shutdown (cleanup if needed)
 
