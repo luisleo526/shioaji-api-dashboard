@@ -563,6 +563,11 @@ async def create_order(
     order_history.order_id = result_data.get("order_id")
     order_history.seqno = result_data.get("seqno")
     order_history.ordno = result_data.get("ordno")
+    
+    # For exit orders, update quantity with actual traded quantity from position
+    # (user's request quantity is ignored for exits - actual is determined by position size)
+    if order_request.action in ("long_exit", "short_exit") and result_data.get("quantity"):
+        order_history.quantity = result_data.get("quantity")
 
     # Initial status is "submitted" (order accepted, pending verification)
     order_history.status = "submitted"
