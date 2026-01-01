@@ -114,11 +114,15 @@ app = FastAPI(
 )
 
 # CORS 配置（支援 SaaS 前端連線）
+# 注意：allow_credentials=True 時不能用 ["*"]，需明確列出 origins
+_cors_origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else []
+_allow_all = len(_cors_origins) == 0 or _cors_origins == ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"] if _allow_all else _cors_origins,
+    allow_credentials=not _allow_all,  # 只有明確列出 origins 時才啟用 credentials
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
 )
 

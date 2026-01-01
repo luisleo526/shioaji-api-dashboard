@@ -58,6 +58,15 @@ logger = logging.getLogger(__name__)
 
 # Connection settings
 RECONNECT_DELAY = 5  # seconds between reconnection attempts
+
+# Development mock mode - bypasses Shioaji entirely
+DEV_MOCK_MODE = os.getenv("DEV_MOCK_MODE", "false").lower() == "true"
+if DEV_MOCK_MODE:
+    logger.warning("=" * 60)
+    logger.warning("DEV_MOCK_MODE ENABLED - Shioaji will NOT be used")
+    logger.warning("All responses will be mock data for development")
+    logger.warning("=" * 60)
+
 MAX_RECONNECT_ATTEMPTS = 10
 QUEUE_POLL_TIMEOUT = 5  # seconds to wait for queue items
 HEALTH_CHECK_INTERVAL = 300  # 5 minutes - check connection health periodically
@@ -337,8 +346,173 @@ class TradingWorker:
                 logger.warning(f"{mode_str.capitalize()} connection appears stale, invalidating...")
                 self._invalidate_connection(simulation)
 
+    def _handle_mock_request(self, request: TradingRequest) -> TradingResponse:
+        """Handle request with mock data (for development without Shioaji)."""
+        import random
+        operation = request.operation
+        params = request.params
+
+        logger.debug(f"[MOCK] Processing request: {operation}")
+
+        if operation == TradingOperation.PING.value:
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={"status": "healthy", "simulation": request.simulation, "mock": True},
+            )
+
+        elif operation == TradingOperation.GET_SYMBOLS.value:
+            # Return mock symbols for supported futures
+            mock_symbols = []
+            for product in ["MXF", "TXF"]:
+                mock_symbols.append({
+                    "symbol": product,
+                    "code": f"{product}F5",
+                    "name": f"{product} 近月",
+                    "category": "Futures",
+                    "delivery_month": "202501",
+                })
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={"symbols": mock_symbols, "count": len(mock_symbols)},
+            )
+
+        elif operation == TradingOperation.GET_SYMBOL_INFO.value:
+            symbol = params.get("symbol", "MXF")
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "symbol": symbol,
+                    "code": f"{symbol}F5",
+                    "name": f"{symbol} 近月",
+                    "category": "Futures",
+                    "delivery_month": "202501",
+                    "underlying_kind": "I",
+                    "limit_up": 25000.0,
+                    "limit_down": 20000.0,
+                    "reference": 22500.0,
+                },
+            )
+
+        elif operation == TradingOperation.GET_CONTRACT_CODES.value:
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={"contracts": ["MXFF5", "TXFF5", "MXFG5", "TXFG5"], "count": 4},
+            )
+
+        elif operation == TradingOperation.GET_POSITIONS.value:
+            # Return empty positions by default, or mock positions if configured
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={"positions": [], "count": 0},
+            )
+
+        elif operation == TradingOperation.GET_FUTURES_OVERVIEW.value:
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "products": [
+                        {"product": "MXF", "contracts": [{"symbol": "MXF", "name": "小型台指期貨", "code": "MXFF5"}], "count": 1},
+                        {"product": "TXF", "contracts": [{"symbol": "TXF", "name": "台指期貨", "code": "TXFF5"}], "count": 1},
+                    ]
+                },
+            )
+
+        elif operation == TradingOperation.GET_PRODUCT_CONTRACTS.value:
+            product = params.get("product", "MXF").upper()
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "product": product,
+                    "contracts": [
+                        {"symbol": product, "code": f"{product}F5", "name": f"{product} 近月", "delivery_month": "202501", "category": "Futures"},
+                        {"symbol": product, "code": f"{product}G5", "name": f"{product} 次月", "delivery_month": "202502", "category": "Futures"},
+                    ],
+                    "count": 2,
+                },
+            )
+
+        elif operation == TradingOperation.PLACE_ENTRY_ORDER.value:
+            symbol = params.get("symbol", "MXF")
+            quantity = params.get("quantity", 1)
+            action = params.get("action", "Buy")
+            order_id = f"mock-{int(time.time() * 1000)}"
+
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "order_id": order_id,
+                    "seqno": f"{random.randint(100000, 999999)}",
+                    "ordno": f"M{random.randint(100000, 999999)}",
+                    "action": action,
+                    "quantity": quantity,
+                    "original_quantity": quantity,
+                    "symbol": symbol,
+                    "code": f"{symbol}F5",
+                    "mock": True,
+                },
+            )
+
+        elif operation == TradingOperation.PLACE_EXIT_ORDER.value:
+            symbol = params.get("symbol", "MXF")
+            order_id = f"mock-{int(time.time() * 1000)}"
+
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "order_id": order_id,
+                    "seqno": f"{random.randint(100000, 999999)}",
+                    "ordno": f"M{random.randint(100000, 999999)}",
+                    "action": "Sell",
+                    "quantity": 1,
+                    "symbol": symbol,
+                    "code": f"{symbol}F5",
+                    "mock": True,
+                },
+            )
+
+        elif operation == TradingOperation.CHECK_ORDER_STATUS.value:
+            order_id = params.get("order_id", "")
+            seqno = params.get("seqno", "")
+
+            return TradingResponse(
+                request_id=request.request_id,
+                success=True,
+                data={
+                    "status": "Filled",
+                    "order_id": order_id,
+                    "seqno": seqno,
+                    "ordno": f"M{random.randint(100000, 999999)}",
+                    "order_quantity": 1,
+                    "deal_quantity": 1,
+                    "cancel_quantity": 0,
+                    "fill_avg_price": 22500.0,
+                    "deals": [{"seq": "1", "price": 22500.0, "quantity": 1, "ts": int(time.time())}],
+                    "mock": True,
+                },
+            )
+
+        else:
+            return TradingResponse(
+                request_id=request.request_id,
+                success=False,
+                error=f"Unknown operation: {operation}",
+            )
+
     def _handle_request(self, request: TradingRequest) -> TradingResponse:
         """Process a single trading request."""
+        # Use mock handler if in development mock mode
+        if DEV_MOCK_MODE:
+            return self._handle_mock_request(request)
+
         operation = request.operation
         simulation = request.simulation
         params = request.params
@@ -734,14 +908,18 @@ class TradingWorker:
         logger.info("Trading worker starting...")
         logger.info(f"Supported futures: {SUPPORTED_FUTURES}")
 
+        if DEV_MOCK_MODE:
+            logger.info("Running in DEV_MOCK_MODE - skipping Shioaji connection")
+
         self.running = True
 
-        # Initial connection attempt
-        try:
-            self._get_api_client(simulation=True)
-            logger.info("Initial simulation connection established")
-        except Exception as e:
-            logger.warning(f"Initial simulation connection failed: {e}")
+        # Initial connection attempt (skip in mock mode)
+        if not DEV_MOCK_MODE:
+            try:
+                self._get_api_client(simulation=True)
+                logger.info("Initial simulation connection established")
+            except Exception as e:
+                logger.warning(f"Initial simulation connection failed: {e}")
 
         logger.info(f"Listening for requests on queue: {REQUEST_QUEUE}")
 
