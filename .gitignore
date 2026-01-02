@@ -6,6 +6,11 @@ certs/
 *.pfx
 *.p12
 
+# Credentials and secrets (NEVER commit!)
+credentials/
+secrets/
+*.env.multitenant
+
 # Python
 __pycache__/
 *.py[cod]

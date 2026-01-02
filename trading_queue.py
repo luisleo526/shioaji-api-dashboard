@@ -18,9 +18,16 @@ import redis
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+TENANT_ID = os.getenv("TENANT_ID", "")  # Multi-tenant support
 REQUEST_QUEUE = "trading:requests"
 RESPONSE_PREFIX = "trading:response:"
 REQUEST_TIMEOUT = 30  # seconds to wait for response
+
+
+def get_queue_prefix(tenant_id: Optional[str] = None) -> str:
+    """Get the queue prefix for a tenant."""
+    tid = tenant_id or TENANT_ID
+    return f"tenant:{tid}:" if tid else ""
 
 
 class TradingOperation(str, Enum):
@@ -75,10 +82,16 @@ class TradingQueueClient:
     """
     Client for submitting trading requests to the queue.
     Used by FastAPI workers to communicate with the trading worker.
+
+    Supports multi-tenant mode via tenant_id parameter.
     """
 
-    def __init__(self, redis_url: str = REDIS_URL):
+    def __init__(self, redis_url: str = REDIS_URL, tenant_id: Optional[str] = None):
         self.redis = redis.from_url(redis_url, decode_responses=True)
+        self.tenant_id = tenant_id
+        self._prefix = get_queue_prefix(tenant_id)
+        self._request_queue = f"{self._prefix}{REQUEST_QUEUE}"
+        self._response_prefix = f"{self._prefix}{RESPONSE_PREFIX}"
         self._check_connection()
 
     def _check_connection(self):
@@ -121,11 +134,11 @@ class TradingQueueClient:
             params=params or {},
         )
 
-        response_key = f"{RESPONSE_PREFIX}{request_id}"
+        response_key = f"{self._response_prefix}{request_id}"
 
         try:
             # Push request to queue
-            self.redis.rpush(REQUEST_QUEUE, request.to_json())
+            self.redis.rpush(self._request_queue, request.to_json())
             logger.debug(f"Submitted request {request_id}: {operation.value}")
 
             # Wait for response with blocking pop

@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Float, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Float, Enum, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
 import enum
 
 from database import Base
@@ -26,6 +27,7 @@ class OrderHistory(Base):
     __tablename__ = "order_history"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)  # Multi-tenant support
     symbol = Column(String, nullable=False, index=True)  # Shioaji symbol (e.g., MXF202601, MXFR1)
     code = Column(String, nullable=True, index=True)  # Exchange code (e.g., MXFA6)
     action = Column(String, nullable=False)
@@ -50,6 +52,7 @@ class OrderHistory(Base):
     def to_dict(self):
         return {
             "id": self.id,
+            "tenant_id": str(self.tenant_id) if self.tenant_id else None,
             "symbol": self.symbol,
             "code": self.code,
             "action": self.action,

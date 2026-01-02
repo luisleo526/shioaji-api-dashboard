@@ -1,0 +1,26 @@
+# Worker Dockerfile for multi-tenant trading workers
+# Each tenant gets their own container running this image
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only what the worker needs
+COPY trading_worker.py .
+COPY trading_queue.py .
+COPY trading.py .
+COPY models.py .
+
+# Create secrets directory
+RUN mkdir -p /run/secrets
+
+# Run as non-root user
+RUN useradd -m worker && chown -R worker:worker /app /run/secrets
+USER worker
+
+# Default command
+CMD ["python", "trading_worker.py"]

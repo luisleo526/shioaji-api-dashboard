@@ -31,6 +31,8 @@ from shioaji.error import (
     TargetContractNotExistError,
 )
 
+from pathlib import Path
+
 from trading_queue import (
     TradingRequest,
     TradingResponse,
@@ -38,6 +40,7 @@ from trading_queue import (
     REQUEST_QUEUE,
     RESPONSE_PREFIX,
     REDIS_URL,
+    get_queue_prefix,
 )
 from trading import (
     SUPPORTED_FUTURES,
@@ -76,14 +79,28 @@ CONNECTION_LOGOUT_TIMEOUT = 3  # seconds to wait for logout before giving up
 class TradingWorker:
     """
     Worker that maintains Shioaji connections and processes trading requests.
-    
+
     Features:
     - Automatic reconnection on connection loss or token expiration
     - Graceful handling of SDK session disconnects
     - Periodic health checks to detect stale connections
+    - Multi-tenant support via TENANT_ID environment variable
     """
 
     def __init__(self):
+        # Multi-tenant support
+        self.tenant_id = os.getenv("TENANT_ID", "")
+        self.tenant_slug = os.getenv("TENANT_SLUG", "")
+        self._queue_prefix = get_queue_prefix(self.tenant_id)
+
+        # Queue names with tenant prefix
+        self._request_queue = f"{self._queue_prefix}{REQUEST_QUEUE}"
+        self._response_prefix = f"{self._queue_prefix}{RESPONSE_PREFIX}"
+
+        if self.tenant_id:
+            logger.info(f"Running in multi-tenant mode: tenant_id={self.tenant_id}, slug={self.tenant_slug}")
+            logger.info(f"Queue prefix: {self._queue_prefix}")
+
         self.redis = redis.from_url(REDIS_URL, decode_responses=True)
         self.running = False
         self.api_clients: Dict[bool, Optional[sj.Shioaji]] = {
@@ -91,14 +108,14 @@ class TradingWorker:
             False: None,  # real trading
         }
         self.pending_trades: Dict[str, Any] = {}  # Store trades for status checking
-        
+
         # Track connection health
         self._last_successful_request: Dict[bool, float] = {
             True: 0.0,
             False: 0.0,
         }
         self._connection_lock = threading.Lock()
-        
+
         # Track if connections are being invalidated (to avoid concurrent cleanup)
         self._invalidating: Dict[bool, bool] = {
             True: False,
@@ -108,6 +125,35 @@ class TradingWorker:
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _read_secret(self, env_name: str, file_env_name: str) -> Optional[str]:
+        """
+        Read a secret from environment variable or file.
+
+        Supports Docker secrets by reading from files mounted at /run/secrets.
+
+        Args:
+            env_name: Environment variable name (e.g., "API_KEY")
+            file_env_name: Environment variable containing file path (e.g., "API_KEY_FILE")
+
+        Returns:
+            Secret value or None if not found
+        """
+        # First try direct environment variable
+        value = os.getenv(env_name)
+        if value:
+            return value
+
+        # Then try file-based secret (Docker secrets)
+        file_path = os.getenv(file_env_name)
+        if file_path:
+            path = Path(file_path)
+            if path.exists():
+                return path.read_text().strip()
+            else:
+                logger.warning(f"Secret file not found: {file_path}")
+
+        return None
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
@@ -154,15 +200,21 @@ class TradingWorker:
         """
         Get or create an API client for the specified mode.
         Handles connection and reconnection logic.
+
+        Credentials are read from environment variables or Docker secrets files.
         """
         if self.api_clients[simulation] is not None:
             return self.api_clients[simulation]
 
-        api_key = os.getenv("API_KEY")
-        secret_key = os.getenv("SECRET_KEY")
+        # Read credentials (support both env vars and Docker secrets)
+        api_key = self._read_secret("API_KEY", "API_KEY_FILE")
+        secret_key = self._read_secret("SECRET_KEY", "SECRET_KEY_FILE")
 
         if not api_key or not secret_key:
-            raise ValueError("API_KEY or SECRET_KEY environment variable not set")
+            raise ValueError(
+                "API credentials not found. Set API_KEY/SECRET_KEY environment variables "
+                "or API_KEY_FILE/SECRET_KEY_FILE for Docker secrets."
+            )
 
         mode_str = "simulation" if simulation else "real"
         logger.info(f"Creating new Shioaji connection ({mode_str} mode)...")
@@ -204,12 +256,19 @@ class TradingWorker:
         raise RuntimeError("Failed to connect to Shioaji after max attempts")
 
     def _activate_ca(self, api: sj.Shioaji):
-        """Activate CA certificate for real trading."""
-        ca_path = os.getenv("CA_PATH")
-        ca_password = os.getenv("CA_PASSWORD")
+        """Activate CA certificate for real trading.
+
+        Supports both direct paths and Docker secrets files.
+        """
+        # Try file-based path first (Docker secrets)
+        ca_path = self._read_secret("CA_PATH", "CA_PATH_FILE")
+        ca_password = self._read_secret("CA_PASSWORD", "CA_PASSWORD_FILE")
 
         if not ca_path or not ca_password:
-            logger.warning("CA_PATH or CA_PASSWORD not set, skipping CA activation")
+            logger.warning(
+                "CA_PATH/CA_PASSWORD or CA_PATH_FILE/CA_PASSWORD_FILE not set, "
+                "skipping CA activation"
+            )
             return
 
         accounts = api.list_accounts()
@@ -921,14 +980,14 @@ class TradingWorker:
             except Exception as e:
                 logger.warning(f"Initial simulation connection failed: {e}")
 
-        logger.info(f"Listening for requests on queue: {REQUEST_QUEUE}")
+        logger.info(f"Listening for requests on queue: {self._request_queue}")
 
         last_health_check = time.time()
-        
+
         while self.running:
             try:
                 # Block waiting for request with timeout
-                result = self.redis.blpop(REQUEST_QUEUE, timeout=QUEUE_POLL_TIMEOUT)
+                result = self.redis.blpop(self._request_queue, timeout=QUEUE_POLL_TIMEOUT)
 
                 if result is None:
                     # Timeout - good time to check connection health
@@ -954,7 +1013,7 @@ class TradingWorker:
                     self._last_successful_request[request.simulation] = time.time()
 
                 # Send response
-                response_key = f"{RESPONSE_PREFIX}{request.request_id}"
+                response_key = f"{self._response_prefix}{request.request_id}"
                 self.redis.rpush(response_key, response.to_json())
                 self.redis.expire(response_key, 60)  # Clean up after 60s
 

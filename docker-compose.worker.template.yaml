@@ -1,0 +1,39 @@
+# Worker template for per-tenant trading workers
+#
+# This template is used by WorkerManager to spawn tenant-specific workers.
+# Variables are replaced at runtime:
+#   {tenant_id} - UUID of the tenant
+#   {tenant_slug} - URL-safe tenant identifier
+#   {redis_db} - Redis database number (0-15)
+#
+# DO NOT use this file directly. It is processed by WorkerManager.
+
+services:
+  trading-worker-{tenant_slug}:
+    image: shioaji-worker:latest
+    container_name: worker-{tenant_slug}
+    command: python trading_worker.py
+    environment:
+      - TENANT_ID={tenant_id}
+      - TENANT_SLUG={tenant_slug}
+      - REDIS_URL=redis://redis:6379/{redis_db}
+      - API_KEY_FILE=/run/secrets/api_key
+      - SECRET_KEY_FILE=/run/secrets/secret_key
+      - CA_PATH_FILE=/run/secrets/ca.pfx
+      - CA_PASSWORD_FILE=/run/secrets/ca_password
+    volumes:
+      # Secrets are mounted from temp directory created by WorkerManager
+      - {secrets_dir}:/run/secrets:ro
+    networks:
+      - shioaji-network
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    labels:
+      - "tenant.id={tenant_id}"
+      - "tenant.slug={tenant_slug}"
+      - "managed-by=worker-manager"
+
+networks:
+  shioaji-network:
+    external: true

@@ -5,3 +5,6 @@ pydantic
 sqlalchemy
 psycopg2-binary
 redis
+cryptography
+docker
+slowapi

@@ -1,0 +1,163 @@
+# Multi-tenant Docker Compose configuration
+#
+# This configuration sets up the multi-tenant trading backend architecture:
+# - Gateway: Routes requests to tenant-specific workers
+# - Admin API: Manages tenants and workers
+# - Shared infrastructure: Redis, PostgreSQL
+#
+# Per-tenant workers are created dynamically by the WorkerManager
+#
+# Usage:
+#   docker-compose -f docker-compose.multitenant.yaml up -d
+#
+# Environment variables:
+#   CREDENTIAL_MASTER_KEY: Master key for credential encryption (required)
+#   ADMIN_API_TOKEN: Token for admin API authentication
+#
+
+services:
+  # Database migration service
+  db-migrate:
+    image: postgres:16-alpine
+    command: bash /db/migrate.sh
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shioaji
+      PGHOST: db
+      PGPASSWORD: postgres
+      MIGRATIONS_DIR: /db/migrations
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - shioaji-network
+
+  # API Gateway - Routes requests to tenant workers
+  gateway:
+    build: .
+    command: uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --workers 4
+    ports:
+      - "9879:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    volumes:
+      - ./gateway:/app/gateway:ro
+      - ./models:/app/models:ro
+      - ./utils:/app/utils:ro
+      - ./trading_queue.py:/app/trading_queue.py:ro
+      - ./database.py:/app/database.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - shioaji-network
+
+  # Worker image (built but not run directly - spawned by WorkerManager)
+  worker-base:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: shioaji-worker:latest
+    profiles:
+      - build-only  # Never started, just for building image
+
+  # Admin API - Manages tenants, credentials, and workers
+  admin-api:
+    build: .
+    command: uvicorn admin.main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports:
+      - "9880:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/shioaji
+      - CREDENTIAL_MASTER_KEY=${CREDENTIAL_MASTER_KEY}
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-admin-changeme}
+      - SECRETS_DIR=/app/secrets
+      - HOST_SECRETS_DIR=${PWD}/secrets
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - WORKER_IMAGE=shioaji-worker:latest
+      - DOCKER_NETWORK=vibe-shioaji-api-dashboard_shioaji-network
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./admin:/app/admin:ro
+      - ./models:/app/models:ro
+      - ./credentials:/app/credentials:ro
+      - ./orchestrator:/app/orchestrator:ro
+      - ./utils:/app/utils:ro
+      - ./trading_queue.py:/app/trading_queue.py:ro
+      - ./database.py:/app/database.py:ro
+      - ./secrets:/app/secrets
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - shioaji-network
+
+  # Redis - Shared queue for all workers
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shioaji-network
+
+  # PostgreSQL - Shared database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shioaji
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shioaji"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shioaji-network
+
+networks:
+  shioaji-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
