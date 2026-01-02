@@ -22,7 +22,7 @@
 ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
 │   TradingView   │ ───► │      NGROK      │ ───► │      NGINX      │ ───► │   FastAPI App   │
 │    Webhook      │      │  (HTTPS Tunnel) │      │  (Reverse Proxy)│      │   (Port 8000)   │
-└─────────────────┘      └─────────────────┘      └────────┬────────┘      └────────┬────────┘
+└─────────────────┘      └─────────────────┘      └────────┬────────┘      └───────┬─────────┘
                                                           │                        │
                                                    IP Whitelist            ┌───────┴───────┐
                                                    Rate Limiting           ▼               ▼
@@ -179,9 +179,11 @@ docker compose up -d
 
 ### 設定步驟
 
-1. 註冊 NGROK 帳號：https://dashboard.ngrok.com/signup
-2. 取得 Auth Token：https://dashboard.ngrok.com/get-started/your-authtoken
-3. 在 `.env` 設定 `NGROK_AUTHTOKEN`
+1. **註冊 NGROK 帳號**（免費）：https://dashboard.ngrok.com/signup
+2. **取得 Auth Token**：https://dashboard.ngrok.com/get-started/your-authtoken
+3. **設定環境變數**：在 `.env` 檔案中填入 `NGROK_AUTHTOKEN`
+
+> ⚠️ **必須註冊**：NGROK 需要 Auth Token 才能建立隧道，請先完成註冊。
 
 ### 取得公開 URL
 
